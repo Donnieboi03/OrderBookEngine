@@ -8,9 +8,6 @@
 #include <atomic>
 #include<ctime>
 #include <map>
-#ifdef FILE
-#include "Heap.cpp"
-#endif
 
 // Order Types
 enum side_type
@@ -59,7 +56,7 @@ public:
     double pop(const int index = 0)
     {
         try{
-            if (!heap.size()) throw std::runtime_error("Empty Heap");
+            if (!heap.size()) throw std::runtime_error("Empty Book");
             double popped_val = heap[index];
             std::swap(heap[index], heap[heap.size() - 1]);
             heap.pop_back();
@@ -68,9 +65,8 @@ public:
         }
         catch(std::exception &error)
         {
-            std::cerr <<  error.what() << std::endl;
+            std::cerr << "Order Book Error: " << error.what() << std::endl;
         }
-
         return double();
     }
 
@@ -82,10 +78,27 @@ public:
         }
         catch(std::exception &error)
         {
-            std::cerr <<  error.what() << std::endl;
+            std::cerr << "Order Book Error: " << error.what() << std::endl;
         }
-
         return double();
+    }
+
+    const int find(double data) const
+    {
+        try{
+            if (!heap.size()) throw std::runtime_error("Empty Book");
+            for (auto &x : heap)
+            {
+                if (x == data) return x;
+            }
+            throw std::runtime_error("Price Level Does Not Exist");
+        }
+        catch(std::exception &error)
+        {
+            std::cerr << "Order Book Error: " << error.what() << std::endl;
+        }
+        return double();
+
     }
 
     const int size() const { return heap.size(); }
@@ -199,6 +212,62 @@ public:
         return _id;
     }
 
+    void cancel_order(const unsigned int _id)
+    {
+        // Mutex
+        std::unique_lock<std::mutex> lock(order_lock);
+        try
+        {
+            if (OrderTable.find(_id) == OrderTable.end()) throw("Order Does Not Exist");
+            
+            std::shared_ptr<OrderInfo> order = OrderTable[_id];
+            
+            // Get price level for best asks and bids
+            OrderLevel *order_level = order->side == BID ?
+            &BidLevels[order->price] : &AskLevels[order->price];
+
+            // Itterate thruogh order level filtering out ORDER ID
+            OrderLevel new_level;
+            for (auto& cur_order : *order_level)
+            {
+                if (cur_order->id != _id) new_level.push_back(cur_order);
+            }
+            order_level = std::move(&new_level);
+
+            // If Order Level is empty pop from Book and erase Order Level
+            if (order_level->empty())
+            {
+                    if (order->side == BID)
+                {
+                    BidsBook.pop(BidsBook.find(order->price));
+                    BidLevels.erase(order->price);
+                }
+                    else
+                {
+                    AsksBook.pop(AsksBook.find(order->price));
+                    AskLevels.erase(order->price);
+                }
+            }
+
+            // Erase Order
+            OrderTable.erase(_id);
+        }
+        catch (std::exception &error)
+        {
+            std::cerr << error.what() << std::endl;
+        }
+
+        book_updated.store(true);
+        order_processed.store(false); 
+        order_cv.notify_one(); // Notify Engine
+    }
+
+    const unsigned int edit_order(const side_type _side, double _qty, double _price, const unsigned int _id)
+    {
+        cancel_order(_id);
+        return place_order(_side, _qty, _price);
+    }
+
 private:
     // Order Book
     OrderBook AsksBook; // Asks Order Book
@@ -277,7 +346,7 @@ private:
                 }
             } catch (std::exception &error)
             {
-                std::cerr << error.what() << std::endl;
+                std::cerr << "Matching Warning: " << error.what() << std::endl;
             }
 
             book_updated.store(false);
@@ -352,7 +421,8 @@ private:
 int main()
 {    
     OrderEngine OrderEngine;
-    OrderEngine.place_order(BID, 10, 100);
+    const unsigned int order_id = OrderEngine.place_order(BID, 10, 100);
+    OrderEngine.edit_order(BID, 15, 100, order_id);
     OrderEngine.place_order(ASK, 5, 99);
     OrderEngine.place_order(ASK, 5, 100);
     OrderEngine.place_order(BID, 5, 101);    
