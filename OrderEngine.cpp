@@ -33,9 +33,9 @@ struct OrderInfo
 
 // Order Level 
 using OrderLevel = std::deque<std::shared_ptr<OrderInfo>>;
-using OrderLevels = std::map<double, OrderLevel>;
-using OrderTable = std::map<unsigned int, std::shared_ptr<OrderInfo>>;
-using OrderInfoList = std::vector<std::tuple<const unsigned int, const std::string, const double, const double, const std::time_t>>;
+using LevelMap = std::map<double, OrderLevel>;
+using OrderMap = std::map<unsigned int, std::shared_ptr<OrderInfo>>;
+using OrderInfoList = std::vector<std::tuple<unsigned int, std::string, double, double, std::time_t>>;
 
 // Order Book
 class PriceHeap
@@ -163,6 +163,7 @@ public:
         if (engine.joinable()) engine.join(); 
     }
 
+    // POST: Place Order
     const unsigned int place_order(const side_type _side, double _qty, double _price)
     {
         // Mutex
@@ -213,11 +214,11 @@ public:
             default:
                 break;
             }
+            notify_open(_id);
             recent_order_id = _id;
             book_updated.store(true);
-            order_processed.store(false);
             order_cv.notify_one(); // Wake Matching Engine
-            order_cv.wait(lock, [this]{ return !book_updated.load() || order_processed.load(); }); // Wait for matching engine to process the order
+            order_cv.wait(lock, [this]{ return !book_updated.load(); }); // Wait for matching engine to process the order
             return _id;
         }
         catch(std::exception &error)
@@ -227,6 +228,7 @@ public:
         return int();
     }
 
+    // POST: Cancel Order
     void cancel_order(const unsigned int _id)
     {
         // Mutex
@@ -264,7 +266,7 @@ public:
                 }
             }
 
-            // Erase Order
+            notify_cancel(_id);
             OrderTable.erase(_id);
         }
         catch (std::exception &error)
@@ -273,10 +275,10 @@ public:
         }
 
         book_updated.store(true);
-        order_processed.store(false); 
         order_cv.notify_one(); // Notify Engine
     }
 
+    // POST: Edit Order
     const unsigned int edit_order(const side_type _side, double _qty, double _price, const unsigned int _id)
     {
         cancel_order(_id);
@@ -287,18 +289,21 @@ private:
     // Order Book
     PriceHeap AsksBook; // Asks Order Book
     PriceHeap BidsBook; // Bids Order Book
-    OrderLevels AskLevels; // Asks Price Levels
-    OrderLevels BidLevels; // Bids Price Levels
-    OrderTable OrderTable; // Map to all active orders
-    OrderInfoList FilledOrders; // Filled Orders
+    LevelMap AskLevels; // Asks Price Levels
+    LevelMap BidLevels; // Bids Price Levels
+    OrderMap OrderTable; // Map to all active orders
     unsigned int recent_order_id; // New Orders ID
+    
+    // Order Lists
+    OrderInfoList OpenOrders; // Open Orders
+    OrderInfoList FilledOrders; // Filled Orders
+    OrderInfoList CancledOrders; // Canceled Orders
 
     // Concurreny
     std::thread engine;
     std::mutex order_lock;
     std::condition_variable order_cv;
     std::atomic<bool> book_updated;
-    std::atomic<bool> order_processed;
     std::atomic<bool> engine_running;
 
     // Random
@@ -314,7 +319,7 @@ private:
             {
                 // Sleep Lock
                 std::unique_lock<std::mutex> lock(order_lock);
-                order_cv.wait(lock, [this]{ return book_updated.load() || !engine_running || (AsksBook.size() && BidsBook.size()); });
+                order_cv.wait(lock, [this]{ return !engine_running.load() || book_updated.load() || (AsksBook.size() && BidsBook.size()); });
                 
                 // If Asks or Bids is Empty Continue
                 if (!(AsksBook.size() && BidsBook.size())) throw std::runtime_error("Asks or Bids is empty");
@@ -365,7 +370,6 @@ private:
             }
 
             book_updated.store(false);
-            order_processed.store(true);
             order_cv.notify_one(); // Notify that the order has been processed
         }
     }
@@ -379,7 +383,9 @@ private:
             best_ask->qty -= best_bid->qty;
             best_bid->qty = 0;
             best_level_bids.pop_front();
-            notify(best_bid->id, qty_filled);
+            notify_fill(best_bid->id, qty_filled);
+            OrderTable.erase(best_bid->id);
+
         } 
         else if (best_ask->qty < best_bid->qty)
         {
@@ -388,7 +394,9 @@ private:
             best_ask->qty = 0;
 
             best_level_asks.pop_front();
-            notify(best_ask->id, qty_filled);
+            notify_fill(best_ask->id, qty_filled);
+            OrderTable.erase(best_ask->id);
+
         } 
         else
         {   
@@ -397,9 +405,12 @@ private:
             best_bid->qty = 0;
 
             best_level_bids.pop_front();
-            notify(best_ask->id, qty_filled);
+            notify_fill(best_ask->id, qty_filled);
+            OrderTable.erase(best_ask->id);
             best_level_asks.pop_front();
-            notify(best_bid->id, qty_filled);
+            notify_fill(best_bid->id, qty_filled);
+            OrderTable.erase(best_bid->id);
+
         }
         
         // If best asks level is empty then pop level and erase price map
@@ -416,9 +427,29 @@ private:
         }
     }
 
-    // Notify of what Orders were filled
-    void notify(const unsigned int _id, const double qty_filled)
+    // Notify of what Orders are open
+    void notify_open(const unsigned int _id)
     {
+        std::shared_ptr<OrderInfo> order = OrderTable[_id];
+        std::string _side = order->side == BID ? "BUY" : "SELL";
+        std::time_t _time = time(0);
+        std::cout << "[OPEN] | " << "ID: " << order->id << " | SIDE: " << _side << " | QTY: " << order->qty << " | PRICE: "
+        << order->price << " | TIME: "  << _time << std::endl;
+        std::tuple<const unsigned int, std::string, const double, const double, const std::time_t> 
+        open_order( order->id, _side, order->qty, order->price, _time);
+        OpenOrders.push_back(open_order);
+    }
+
+    // Notify of what Orders were filled
+    void notify_fill(const unsigned int _id, const double qty_filled)
+    {
+        // Remove Order from OpenOrders List
+        for (int i = 0; i < OpenOrders.size(); i++)
+        {
+            unsigned int open_id = std::get<0>(OpenOrders[i]);
+            if (open_id == _id) OpenOrders.erase(OpenOrders.begin() + i);
+        }
+
         std::shared_ptr<OrderInfo> order = OrderTable[_id];
         std::string _side = order->side == BID ? "BUY" : "SELL";
         std::time_t _time = time(0);
@@ -427,19 +458,39 @@ private:
         std::tuple<const unsigned int, std::string, const double, const double, const std::time_t> 
         filled_order( order->id, _side, qty_filled, order->price, _time);
         FilledOrders.push_back(filled_order);
-        OrderTable.erase(_id);
+    }
+
+    // Notify of what Orders were canceled
+    void notify_cancel(const unsigned int _id)
+    {
+        // Remove Order from OpenOrders List
+        for (int i = 0; i < OpenOrders.size(); i++)
+        {
+            unsigned int open_id = std::get<0>(OpenOrders[i]);
+            if (open_id == _id) OpenOrders.erase(OpenOrders.begin() + i);
+        }
+
+        std::shared_ptr<OrderInfo> order = OrderTable[_id];
+        std::string _side = order->side == BID ? "BUY" : "SELL";
+        std::time_t _time = time(0);
+        std::cout << "[CANCELED] | " << "ID: " << order->id << " | SIDE: " << _side << " | QTY: " << order->qty << " | PRICE: "
+        << order->price << " | TIME: "  << _time << std::endl;
+        std::tuple<const unsigned int, std::string, const double, const double, const std::time_t> 
+        canceled_order( order->id, _side, order->qty, order->price, _time);
+        CancledOrders.push_back(canceled_order);
     }
 };
-
 
 int main()
 {    
     OrderEngine OrderEngine;
+    unsigned int _id = 0;
     // // Place 100 Bids from 1 - 100 qty
     for (int i = 0; i < 100; i++)
     {
-        OrderEngine.place_order(BID, i + 1, 100);
+       _id = OrderEngine.place_order(BID, i + 1, 100);
     }
+    OrderEngine.cancel_order(_id);
     // Place 100 Asks from 100 - 1 qty
     for (int i = 100; i >= 1; i--)
     {
