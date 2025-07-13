@@ -33,6 +33,9 @@ struct OrderInfo
 
 // Order Level 
 using OrderLevel = std::deque<std::shared_ptr<OrderInfo>>;
+using OrderLevels = std::map<double, OrderLevel>;
+using OrderTable = std::map<unsigned int, std::shared_ptr<OrderInfo>>;
+using OrderInfoList = std::vector<std::tuple<const unsigned int, const std::string, const double, const double, const std::time_t>>;
 
 // Order Book
 class PriceHeap
@@ -66,7 +69,7 @@ public:
         }
         catch(std::exception &error)
         {
-            std::cerr << "Order Book Error: " << error.what() << std::endl;
+            std::cerr << "Heap Error: " << error.what() << std::endl;
         }
         return double();
     }
@@ -79,7 +82,7 @@ public:
         }
         catch(std::exception &error)
         {
-            std::cerr << "Order Book Error: " << error.what() << std::endl;
+            std::cerr << "Heap Error: " << error.what() << std::endl;
         }
         return double();
     }
@@ -96,7 +99,7 @@ public:
         }
         catch(std::exception &error)
         {
-            std::cerr << "Order Book Error: " << error.what() << std::endl;
+            std::cerr << "Heap Error: " << error.what() << std::endl;
         }
         return double();
 
@@ -164,56 +167,64 @@ public:
     {
         // Mutex
         std::unique_lock<std::mutex> lock(order_lock);
-        
-        // Random ID Generation
-        const unsigned int _id = dist(gen);
+        try{
+            if ((_side != BID) && (_side != ASK)) throw std::runtime_error("Invalid Side");
+            if (!_qty) throw std::runtime_error("Order Qty is Zero");
 
-        // Time
-        std::time_t _time = time(0);
-
-        // New Order
-        std::shared_ptr<OrderInfo> new_order = std::make_shared<OrderInfo>(_side, _qty, _price, _id, _time);
-
-        switch (_side)
-        {
-        case ASK:
+            // Random ID Generation
+            const unsigned int _id = dist(gen);
+    
+            // Time
+            std::time_t _time = time(0);
+    
+            // New Order
+            std::shared_ptr<OrderInfo> new_order = std::make_shared<OrderInfo>(_side, _qty, _price, _id, _time);
+    
+            switch (_side)
             {
-                // Create price level if no price level
-                if (AskLevels.find(_price) == AskLevels.end())
+            case ASK:
                 {
-                    OrderLevel new_level;
-                    AsksBook.push(_price);
-                    AskLevels[_price] = new_level;
+                    // Create price level if no price level
+                    if (AskLevels.find(_price) == AskLevels.end())
+                    {
+                        OrderLevel new_level;
+                        AsksBook.push(_price);
+                        AskLevels[_price] = new_level;
+                    }
+                    AskLevels[_price].push_back(new_order);
+                    OrderTable[_id] = new_order;
+                    break;
                 }
-                AskLevels[_price].push_back(new_order);
-                OrderTable[_id] = new_order;
+            
+            case BID:
+                {
+                    // Create price level if no price level
+                    if (BidLevels.find(_price) == BidLevels.end())
+                    {
+                        OrderLevel new_level;
+                        BidsBook.push(_price);
+                        BidLevels[_price] = new_level;
+                    }
+                    BidLevels[_price].push_back(new_order);
+                    OrderTable[_id] = new_order;
+                    break;
+                }
+            
+            default:
                 break;
             }
-        
-        case BID:
-            {
-                // Create price level if no price level
-                if (BidLevels.find(_price) == BidLevels.end())
-                {
-                    OrderLevel new_level;
-                    BidsBook.push(_price);
-                    BidLevels[_price] = new_level;
-                }
-                BidLevels[_price].push_back(new_order);
-                OrderTable[_id] = new_order;
-                break;
-            }
-        
-        default:
-            break;
+            recent_order_id = _id;
+            book_updated.store(true);
+            order_processed.store(false);
+            order_cv.notify_one(); // Wake Matching Engine
+            order_cv.wait(lock, [this]{ return !book_updated.load() || order_processed.load(); }); // Wait for matching engine to process the order
+            return _id;
         }
-
-        recent_order_id = _id;
-        book_updated.store(true);
-        order_processed.store(false);
-        order_cv.notify_one(); // Wake Matching Engine
-        order_cv.wait(lock, [this]{ return !book_updated.load() || order_processed.load(); }); // Wait for matching engine to process the order
-        return _id;
+        catch(std::exception &error)
+        {
+            std::cerr << "Order Error: " << error.what() << std::endl;
+        }
+        return int();
     }
 
     void cancel_order(const unsigned int _id)
@@ -258,7 +269,7 @@ public:
         }
         catch (std::exception &error)
         {
-            std::cerr << error.what() << std::endl;
+            std::cerr << "Order Error: " << error.what() << std::endl;
         }
 
         book_updated.store(true);
@@ -276,11 +287,10 @@ private:
     // Order Book
     PriceHeap AsksBook; // Asks Order Book
     PriceHeap BidsBook; // Bids Order Book
-    std::map<double, OrderLevel> AskLevels; // Asks Price Levels
-    std::map<double, OrderLevel> BidLevels; // Bids Price Levels
-    std::map<unsigned int, std::shared_ptr<OrderInfo>> OrderTable; // Map to all active orders
-    std::vector<std::tuple<const unsigned int, const std::string, const double, const double, const std::time_t>> 
-    FilledOrders; // Filled Orders
+    OrderLevels AskLevels; // Asks Price Levels
+    OrderLevels BidLevels; // Bids Price Levels
+    OrderTable OrderTable; // Map to all active orders
+    OrderInfoList FilledOrders; // Filled Orders
     unsigned int recent_order_id; // New Orders ID
 
     // Concurreny
@@ -368,9 +378,8 @@ private:
             double qty_filled = best_bid->qty;
             best_ask->qty -= best_bid->qty;
             best_bid->qty = 0;
-
             best_level_bids.pop_front();
-            notify(best_bid->id, best_bid->qty);
+            notify(best_bid->id, qty_filled);
         } 
         else if (best_ask->qty < best_bid->qty)
         {
@@ -426,9 +435,14 @@ private:
 int main()
 {    
     OrderEngine OrderEngine;
-    const unsigned int order_id = OrderEngine.place_order(BID, 10, 100);
-    OrderEngine.edit_order(BID, 15, 100, order_id);
-    OrderEngine.place_order(ASK, 5, 99);
-    OrderEngine.place_order(ASK, 5, 100);
-    OrderEngine.place_order(BID, 5, 101);    
+    // // Place 100 Bids from 1 - 100 qty
+    for (int i = 0; i < 100; i++)
+    {
+        OrderEngine.place_order(BID, i + 1, 100);
+    }
+    // Place 100 Asks from 100 - 1 qty
+    for (int i = 100; i >= 1; i--)
+    {
+        OrderEngine.place_order(ASK, i, 100);
+    }
 }
