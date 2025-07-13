@@ -1,5 +1,4 @@
-# OrderBookEngine
-⚙️ High-Performance C++ Matching Engine
+#⚙️ High-Performance C++ Matching Engine
 A multithreaded, low-latency matching engine for simulating a financial order book. Built entirely in modern C++ with custom heap-based order books for managing price levels and thread-safe execution.
 
 🧠 Features:
