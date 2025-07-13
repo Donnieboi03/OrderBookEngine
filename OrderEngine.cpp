@@ -8,6 +8,9 @@
 #include <atomic>
 #include<ctime>
 #include <map>
+#ifdef FILE
+#include "Heap.cpp"
+#endif
 
 // Order Types
 enum side_type
@@ -16,7 +19,7 @@ enum side_type
     ASK
 };
 
-// Order
+// Order Info
 struct OrderInfo
 {
     const side_type side;
@@ -33,104 +36,97 @@ struct OrderInfo
 // Order Level 
 using OrderLevel = std::deque<std::shared_ptr<OrderInfo>>;
 
-// Order Book for Asks
-class AsksBook
+// Order Book
+class OrderBook
 {
 public:
-    // Push level
-    void push(double level)
+    OrderBook()
+    : heap(0), min(true)
     {
-        asks.push(level);
     }
 
-    // Pop best ask
-    double pop()
+    OrderBook(bool _min)
+    : heap(0), min(_min)
     {
-        try
-        {            
-            if (!size()) throw std::runtime_error("Asks Book is Empty");
-            double _level = asks.top();
-            asks.pop();
-            return _level;
-        } 
-        catch(const std::exception& e)
-        {
-            std::cerr << e.what() << '\n';
-            return -1;
+    }
+
+    void push(const double data)
+    {
+        heap.push_back(data);
+        heapify_up(heap.size() - 1);
+    }
+
+    double pop(const int index = 0)
+    {
+        try{
+            if (!heap.size()) throw std::runtime_error("Empty Heap");
+            double popped_val = heap[index];
+            std::swap(heap[index], heap[heap.size() - 1]);
+            heap.pop_back();
+            heapify_down(index);
+            return popped_val;
         }
-    }
-
-    // Peek best ask
-    double peek() const
-    { 
-        try
-        {
-            if (!size()) throw std::runtime_error("Asks Book is Empty");
-            return asks.top();
-        } 
         catch(std::exception &error)
         {
-            std::cerr << error.what() << std::endl;
-            return -1;
+            std::cerr <<  error.what() << std::endl;
         }
+
+        return double();
     }
 
-    // Size
-    int size() const{ return asks.size(); }
-
-private:
-    // Asks Heap (MIN-HEAP)
-    std::priority_queue<double, std::vector<double>, std::greater<double>> asks;
-};
-
-// Order Book for Bids
-class BidsBook
-{
-public:
-    // Push level
-    void push(double level)
-    {
-        bids.push(level);
-    }
-
-    // Pop best bid
-    double pop()
-    {
-        try
-        {            
-            if (!size()) throw std::runtime_error("Bids Book is Empty");
-            double _level = bids.top();
-            bids.pop();
-            return _level;
-        } 
-        catch(const std::exception& e)
-        {
-            std::cerr << e.what() << '\n';
-            return -1;
-        }
-    }
-
-    // Peek best bid
-    double peek() const
+    const double peek() const 
     { 
-        try
-        {
-            if (!size()) throw std::runtime_error("Bids Book is Empty");
-            return bids.top();
-        } 
+        try{
+            if (!heap.size()) throw std::runtime_error("Empty Book");
+            return heap[0]; 
+        }
         catch(std::exception &error)
         {
-            std::cerr << error.what() << std::endl;
-            return -1;
+            std::cerr <<  error.what() << std::endl;
+        }
+
+        return double();
+    }
+
+    const int size() const { return heap.size(); }
+
+private:
+    std::vector<double> heap;
+    const bool min;
+
+    // For Pushing from the End
+    void heapify_up(int index)
+    {
+        while (index > 0)
+        {
+            int parent = (index - 1) / 2;
+            if (min * (heap[index] > heap[parent]) || !min * (heap[index] < heap[parent])) break;
+            std::swap(heap[index], heap[parent]);
+            index = parent;
         }
     }
 
-    // Size
-    int size() const{ return bids.size(); }
+    // For Popping from Front
+    void heapify_down(int index)
+    {
+        while (index < heap.size())
+        {
+            int left_child = (index * 2) + 1 < heap.size() ? (index * 2) + 1 : index;
+            int right_child = (index * 2) + 2 < heap.size() ? (index * 2) + 2 : index;
 
-private:
-    // Bids Heap (MAX-HEAP)
-    std::priority_queue<double, std::vector<double>, std::less<double>> bids;
+            int best_child = min * (heap[left_child] < heap[right_child]) || !min * (heap[left_child] > heap[right_child]) ?
+            left_child : right_child;
+
+            if (min * (heap[best_child] < heap[index]) || !min * (heap[best_child] > heap[index]))
+            {
+                std::swap(heap[best_child], heap[index]);
+                index = best_child;
+            }
+            else{
+                break;
+            }
+        }
+    }
 };
 
 // Order API
@@ -138,7 +134,8 @@ class OrderEngine
 {
 public:
     OrderEngine() 
-    : engine_running(true), book_updated(false), recent_order_id(0), gen(std::random_device{}()), dist(0, UINT32_MAX)
+    : engine_running(true), book_updated(false), recent_order_id(0), gen(std::random_device{}()), dist(0, UINT32_MAX),
+    AsksBook(true), BidsBook(false)
     {
         engine = std::thread(&OrderEngine::matching_engine, this);
     } 
@@ -165,28 +162,28 @@ public:
         case ASK:
             {
                 // Create price level if no price level
-                if (price_level_asks.find(_price) == price_level_asks.end())
+                if (AskLevels.find(_price) == AskLevels.end())
                 {
                     OrderLevel new_level;
                     AsksBook.push(_price);
-                    price_level_asks[_price] = new_level;
+                    AskLevels[_price] = new_level;
                 }
-                price_level_asks[_price].push_back(new_order);
-                order_table[_id] = new_order;
+                AskLevels[_price].push_back(new_order);
+                OrderTable[_id] = new_order;
                 break;
             }
         
         case BID:
             {
                 // Create price level if no price level
-                if (price_level_bids.find(_price) == price_level_bids.end())
+                if (BidLevels.find(_price) == BidLevels.end())
                 {
                     OrderLevel new_level;
                     BidsBook.push(_price);
-                    price_level_bids[_price] = new_level;
+                    BidLevels[_price] = new_level;
                 }
-                price_level_bids[_price].push_back(new_order);
-                order_table[_id] = new_order;
+                BidLevels[_price].push_back(new_order);
+                OrderTable[_id] = new_order;
                 break;
             }
         
@@ -204,11 +201,12 @@ public:
 
 private:
     // Order Book
-    AsksBook AsksBook; // Asks Order Book
-    BidsBook BidsBook; // Bids Order Book
-    std::map<double, OrderLevel> price_level_asks; // Asks Price Levels
-    std::map<double, OrderLevel> price_level_bids; // Bids Price Levels
-    std::map<unsigned int, std::shared_ptr<OrderInfo>> order_table; // Map to all active orders
+    OrderBook AsksBook; // Asks Order Book
+    OrderBook BidsBook; // Bids Order Book
+    std::map<double, OrderLevel> AskLevels; // Asks Price Levels
+    std::map<double, OrderLevel> BidLevels; // Bids Price Levels
+    std::map<unsigned int, std::shared_ptr<OrderInfo>> OrderTable; // Map to all active orders
+    std::vector<std::tuple<const unsigned int, const std::string, const double, const double>> FilledOrders; // Filled Orders
     unsigned int recent_order_id; // New Orders ID
 
     // Concurreny
@@ -222,9 +220,6 @@ private:
     // Random
     std::mt19937_64 gen;
     std::uniform_int_distribution<unsigned int> dist;
-
-    // Filled Orders
-    std::vector<std::tuple<const unsigned int, const std::string, const double, const double>> filled_orders;
     
     // Matching Engine
     void matching_engine()
@@ -244,11 +239,11 @@ private:
                 const double best_asks_price = AsksBook.peek();
                 const double best_bids_price = BidsBook.peek();
                 // Get price level for best asks and bids
-                OrderLevel &best_level_asks = price_level_asks[best_asks_price];
-                OrderLevel &best_level_bids = price_level_bids[best_bids_price];
+                OrderLevel &best_level_asks = AskLevels[best_asks_price];
+                OrderLevel &best_level_bids = BidLevels[best_bids_price];
                 
                 // Get Recent Order
-                std::shared_ptr<OrderInfo> recent_order = order_table[recent_order_id];
+                std::shared_ptr<OrderInfo> recent_order = OrderTable[recent_order_id];
                 while (recent_order->qty)
                 {
                     // Break If you can't trade
@@ -328,28 +323,28 @@ private:
         if (!best_level_asks.size())
         {
             AsksBook.pop();
-            price_level_asks.erase(best_ask->price);
+            AskLevels.erase(best_ask->price);
         }
         // If best bids level is empty then pop level and erase price map
         if (!best_level_bids.size())
         {
             BidsBook.pop();
-            price_level_bids.erase(best_bid->price);
+            BidLevels.erase(best_bid->price);
         }
     }
 
     // Notify of what Orders were filled
     void notify(const unsigned int _id, const double qty_filled)
     {
-        std::shared_ptr<OrderInfo> order = order_table[_id];
+        std::shared_ptr<OrderInfo> order = OrderTable[_id];
         std::string side = order->side == BID ? "BUY" : "SELL";
         std::cout << "[FILLED] | " << "ID: " << order->id << " | SIDE: " << side << " | QTY: " << qty_filled << " | PRICE: "
         << order->price << std::endl;
         std::tuple<const unsigned int, std::string, const double, const double> filled_order(
             order->id, side, qty_filled, order->price
         );
-        filled_orders.push_back(filled_order);
-        order_table.erase(_id);
+        FilledOrders.push_back(filled_order);
+        OrderTable.erase(_id);
     }
 };
 
@@ -360,5 +355,5 @@ int main()
     OrderEngine.place_order(BID, 10, 100);
     OrderEngine.place_order(ASK, 5, 99);
     OrderEngine.place_order(ASK, 5, 100);
-    OrderEngine.place_order(BID, 5, 101);
+    OrderEngine.place_order(BID, 5, 101);    
 }
