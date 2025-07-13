@@ -447,7 +447,12 @@ private:
         for (int i = 0; i < OpenOrders.size(); i++)
         {
             unsigned int open_id = std::get<0>(OpenOrders[i]);
-            if (open_id == _id) OpenOrders.erase(OpenOrders.begin() + i);
+            if (open_id == _id)
+            {
+                OpenOrders.erase(OpenOrders.begin() + i);
+                break;
+            }
+
         }
 
         std::shared_ptr<OrderInfo> order = OrderTable[_id];
@@ -467,7 +472,11 @@ private:
         for (int i = 0; i < OpenOrders.size(); i++)
         {
             unsigned int open_id = std::get<0>(OpenOrders[i]);
-            if (open_id == _id) OpenOrders.erase(OpenOrders.begin() + i);
+            if (open_id == _id)
+            {
+                OpenOrders.erase(OpenOrders.begin() + i);
+                break;
+            }
         }
 
         std::shared_ptr<OrderInfo> order = OrderTable[_id];
