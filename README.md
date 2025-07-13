@@ -14,6 +14,6 @@ A multithreaded, low-latency matching engine for simulating a financial order bo
 
 - 📊 *Efficient price level management with std::map<double, OrderLevel>*
   
-- 🔔 *Live nottifications for all Open, Filled, and Cancelled orders*
+- 🔔 *Live notifications for all Open, Filled, and Cancelled orders*
 
 - 🛠 *Simulated exchange behavior suitable for HFT backtesting, learning, or integration into trading bots*
