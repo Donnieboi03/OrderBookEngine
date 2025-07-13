@@ -22,7 +22,7 @@ struct OrderInfo
     double qty;
     double price;
     const unsigned int id;
-    const std::time_t time = std::time(0);
+    const std::time_t time;
     
 
     OrderInfo(const side_type _side, double _qty, double _price, const unsigned int _id, const std::time_t _time) 
