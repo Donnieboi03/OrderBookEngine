@@ -36,15 +36,15 @@ struct OrderInfo
 using OrderLevel = std::deque<std::shared_ptr<OrderInfo>>;
 
 // Order Book
-class OrderBook
+class PriceHeap
 {
 public:
-    OrderBook()
+    PriceHeap()
     : heap(0), min(true)
     {
     }
 
-    OrderBook(bool _min)
+    PriceHeap(bool _min)
     : heap(0), min(_min)
     {
     }
@@ -237,7 +237,7 @@ public:
             {
                 if (cur_order->id != _id) new_level.push_back(cur_order);
             }
-            order_level = std::move(&new_level);
+            *order_level = std::move(new_level);
 
             // If Order Level is empty pop from Book and erase Order Level
             if (order_level->empty())
@@ -275,8 +275,8 @@ public:
 
 private:
     // Order Book
-    OrderBook AsksBook; // Asks Order Book
-    OrderBook BidsBook; // Bids Order Book
+    PriceHeap AsksBook; // Asks Order Book
+    PriceHeap BidsBook; // Bids Order Book
     std::map<double, OrderLevel> AskLevels; // Asks Price Levels
     std::map<double, OrderLevel> BidLevels; // Bids Price Levels
     std::map<unsigned int, std::shared_ptr<OrderInfo>> OrderTable; // Map to all active orders
