@@ -31,7 +31,7 @@ struct OrderInfo
     } 
 };
 
-// Order Level 
+// Aliases
 using OrderLevel = std::deque<std::shared_ptr<OrderInfo>>;
 using LevelMap = std::map<double, OrderLevel>;
 using OrderMap = std::map<unsigned int, std::shared_ptr<OrderInfo>>;
@@ -185,7 +185,7 @@ public:
             {
             case ASK:
                 {
-                    // Create price level if no price level
+                    // Create new ask price level if no price level
                     if (AskLevels.find(_price) == AskLevels.end())
                     {
                         OrderLevel new_level;
@@ -199,7 +199,7 @@ public:
             
             case BID:
                 {
-                    // Create price level if no price level
+                    // Create new bid price level if no price level
                     if (BidLevels.find(_price) == BidLevels.end())
                     {
                         OrderLevel new_level;
@@ -218,7 +218,7 @@ public:
             recent_order_id = _id;
             book_updated.store(true);
             order_cv.notify_one(); // Wake Matching Engine
-            order_cv.wait(lock, [this]{ return !book_updated.load(); }); // Wait for matching engine to process the order
+            order_cv.wait(lock, [this]{ return !book_updated.load(); }); // Wait for matching engine
             return _id;
         }
         catch(std::exception &error)
@@ -275,7 +275,7 @@ public:
         }
 
         book_updated.store(true);
-        order_cv.notify_one(); // Notify Engine
+        order_cv.notify_one(); // Wake Engine
     }
 
     // POST: Edit Order
@@ -377,38 +377,39 @@ private:
     // Match Orders
     void matching(std::shared_ptr<OrderInfo> best_ask, std::shared_ptr<OrderInfo> best_bid, OrderLevel &best_level_asks, OrderLevel &best_level_bids)
     {
+        // Fill bid then Notify Order
         if (best_ask->qty > best_bid->qty)
         {
             double qty_filled = best_bid->qty;
             best_ask->qty -= best_bid->qty;
             best_bid->qty = 0;
-            best_level_bids.pop_front();
             notify_fill(best_bid->id, qty_filled);
+            best_level_bids.pop_front();
             OrderTable.erase(best_bid->id);
 
         } 
+        // Fill ask then Notify Order
         else if (best_ask->qty < best_bid->qty)
         {
             double qty_filled = best_ask->qty;
             best_bid->qty -= best_ask->qty;
             best_ask->qty = 0;
-
-            best_level_asks.pop_front();
             notify_fill(best_ask->id, qty_filled);
+            best_level_asks.pop_front();
             OrderTable.erase(best_ask->id);
 
         } 
+        // Fill bid and ask then Notify Orders
         else
         {   
             double qty_filled = best_ask->qty;
             best_ask->qty = 0;
             best_bid->qty = 0;
-
-            best_level_bids.pop_front();
             notify_fill(best_ask->id, qty_filled);
-            OrderTable.erase(best_ask->id);
-            best_level_asks.pop_front();
             notify_fill(best_bid->id, qty_filled);
+            best_level_asks.pop_front();
+            best_level_bids.pop_front();
+            OrderTable.erase(best_ask->id);
             OrderTable.erase(best_bid->id);
 
         }
@@ -433,8 +434,11 @@ private:
         std::shared_ptr<OrderInfo> order = OrderTable[_id];
         std::string _side = order->side == BID ? "BUY" : "SELL";
         std::time_t _time = time(0);
+
+        // Notification
         std::cout << "[OPEN] | " << "ID: " << order->id << " | SIDE: " << _side << " | QTY: " << order->qty << " | PRICE: "
         << order->price << " | TIME: "  << _time << std::endl;
+
         std::tuple<const unsigned int, std::string, const double, const double, const std::time_t> 
         open_order( order->id, _side, order->qty, order->price, _time);
         OpenOrders.push_back(open_order);
@@ -458,8 +462,11 @@ private:
         std::shared_ptr<OrderInfo> order = OrderTable[_id];
         std::string _side = order->side == BID ? "BUY" : "SELL";
         std::time_t _time = time(0);
+        
+        // Notification
         std::cout << "[FILLED] | " << "ID: " << order->id << " | SIDE: " << _side << " | QTY: " << qty_filled << " | PRICE: "
         << order->price << " | TIME: "  << _time << std::endl;
+        
         std::tuple<const unsigned int, std::string, const double, const double, const std::time_t> 
         filled_order( order->id, _side, qty_filled, order->price, _time);
         FilledOrders.push_back(filled_order);
@@ -482,8 +489,11 @@ private:
         std::shared_ptr<OrderInfo> order = OrderTable[_id];
         std::string _side = order->side == BID ? "BUY" : "SELL";
         std::time_t _time = time(0);
+        
+        // Notification
         std::cout << "[CANCELED] | " << "ID: " << order->id << " | SIDE: " << _side << " | QTY: " << order->qty << " | PRICE: "
         << order->price << " | TIME: "  << _time << std::endl;
+        
         std::tuple<const unsigned int, std::string, const double, const double, const std::time_t> 
         canceled_order( order->id, _side, order->qty, order->price, _time);
         CancledOrders.push_back(canceled_order);
