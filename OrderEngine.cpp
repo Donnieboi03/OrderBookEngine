@@ -23,9 +23,11 @@ struct OrderInfo
     double qty;
     double price;
     const unsigned int id;
+    const std::time_t time = std::time(0);
+    
 
-    OrderInfo(const side_type _side, double _qty, double _price, const unsigned int _id) 
-    : qty(_qty), price(_price), side(_side), id(_id)
+    OrderInfo(const side_type _side, double _qty, double _price, const unsigned int _id, const std::time_t _time) 
+    : qty(_qty), price(_price), side(_side), id(_id), time(_time)
     {
     } 
 };
@@ -167,8 +169,11 @@ public:
         // Random ID Generation
         const unsigned int _id = dist(gen);
 
+        // Time
+        std::time_t _time = time(0);
+
         // New Order
-        std::shared_ptr<OrderInfo> new_order = std::make_shared<OrderInfo>(_side, _qty, _price, _id);
+        std::shared_ptr<OrderInfo> new_order = std::make_shared<OrderInfo>(_side, _qty, _price, _id, _time);
 
         switch (_side)
         {
@@ -275,7 +280,8 @@ private:
     std::map<double, OrderLevel> AskLevels; // Asks Price Levels
     std::map<double, OrderLevel> BidLevels; // Bids Price Levels
     std::map<unsigned int, std::shared_ptr<OrderInfo>> OrderTable; // Map to all active orders
-    std::vector<std::tuple<const unsigned int, const std::string, const double, const double>> FilledOrders; // Filled Orders
+    std::vector<std::tuple<const unsigned int, const std::string, const double, const double, const std::time_t>> 
+    FilledOrders; // Filled Orders
     unsigned int recent_order_id; // New Orders ID
 
     // Concurreny
@@ -406,12 +412,12 @@ private:
     void notify(const unsigned int _id, const double qty_filled)
     {
         std::shared_ptr<OrderInfo> order = OrderTable[_id];
-        std::string side = order->side == BID ? "BUY" : "SELL";
-        std::cout << "[FILLED] | " << "ID: " << order->id << " | SIDE: " << side << " | QTY: " << qty_filled << " | PRICE: "
-        << order->price << std::endl;
-        std::tuple<const unsigned int, std::string, const double, const double> filled_order(
-            order->id, side, qty_filled, order->price
-        );
+        std::string _side = order->side == BID ? "BUY" : "SELL";
+        std::time_t _time = time(0);
+        std::cout << "[FILLED] | " << "ID: " << order->id << " | SIDE: " << _side << " | QTY: " << qty_filled << " | PRICE: "
+        << order->price << " | TIME: "  << _time << std::endl;
+        std::tuple<const unsigned int, std::string, const double, const double, const std::time_t> 
+        filled_order( order->id, _side, qty_filled, order->price, _time);
         FilledOrders.push_back(filled_order);
         OrderTable.erase(_id);
     }
