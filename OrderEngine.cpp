@@ -195,8 +195,12 @@ public:
             case ASK:
                 {
                     // Create new ask price level if no price level
+                    if (AsksBook.find(_price) == -1)
+                    {
+                        AsksBook.push(_price);
+                        AskLevels[_price] = OrderLevel();
+                    }
                     AskLevels[_price].push_back(new_order);
-                    if (AskLevels.size() == 1) AsksBook.push(_price);
                     OrderTable[_id] = new_order;
                     break;
                 }
@@ -205,7 +209,12 @@ public:
                 {
                     // Create new bid price level if no price level
                     BidLevels[_price].push_back(new_order);
-                    if (BidLevels.size() == 1) BidsBook.push(_price);
+                    if (BidsBook.find(_price) == -1)
+                    {
+                        BidsBook.push(_price);
+                        BidLevels[_price] = OrderLevel();
+                    }
+                    BidLevels[_price].push_back(new_order);
                     OrderTable[_id] = new_order;
                     break;
                 }
