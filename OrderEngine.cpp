@@ -72,10 +72,10 @@ public:
         {
             std::cerr << "Heap Error: " << error.what() << std::endl;
         }
-        return double();
+        return -1;
     }
 
-    const double peek() const 
+    double peek() const 
     { 
         try{
             if (!heap.size()) throw std::runtime_error("Empty Book");
@@ -85,10 +85,10 @@ public:
         {
             std::cerr << "Heap Error: " << error.what() << std::endl;
         }
-        return double();
+        return -1;
     }
 
-    const int find(double data) const
+    int find(double data) const
     {
         try{
             if (!heap.size()) throw std::runtime_error("Empty Book");
@@ -102,11 +102,11 @@ public:
         {
             std::cerr << "Heap Error: " << error.what() << std::endl;
         }
-        return double();
+        return -1;
 
     }
 
-    const int size() const { return heap.size(); }
+    int size() const { return heap.size(); }
 
 private:
     std::vector<double> heap;
@@ -152,7 +152,7 @@ class OrderEngine
 {
 public:
     OrderEngine() 
-    : engine_running(true), book_updated(false), recent_order_id(0), gen(std::random_device{}()), dist(0, UINT32_MAX),
+    : engine_running(true), book_updated(false), recent_order_id(0), gen(std::random_device{}()), dist(1, UINT32_MAX),
     AsksBook(true), BidsBook(false)
     {
         engine = std::thread(&OrderEngine::matching_engine, this);
@@ -168,7 +168,7 @@ public:
     }
 
     // POST: Place Order
-    const unsigned int place_order(const side_type _side, double _qty, double _price)
+    unsigned int place_order(const side_type _side, double _qty, double _price)
     {
         // Mutex
         std::unique_lock<std::mutex> lock(order_lock);
@@ -236,7 +236,7 @@ public:
         {
             std::cerr << "Order Error: " << error.what() << std::endl;
         }
-        return int();
+        return 0;
     }
 
     // POST: Cancel Order
@@ -254,7 +254,7 @@ public:
             OrderLevel *order_level = order->side == BID ?
             &BidLevels[order->price] : &AskLevels[order->price];
 
-            // Itterate thruogh order level filtering out ORDER ID
+            // Iterate thruogh order level filtering out ORDER ID
             OrderLevel new_level;
             for (auto& cur_order : *order_level)
             {
@@ -289,15 +289,27 @@ public:
         order_cv.notify_one(); // Wake Engine
     }
 
-    // POST: Edit Order
-    const unsigned int edit_order(const side_type _side, double _qty, double _price, const unsigned int _id)
+    // PATCH: Edit Order
+    unsigned int edit_order(const side_type _side, double _qty, double _price, const unsigned int _id)
     {
         cancel_order(_id);
         return place_order(_side, _qty, _price);
     }
 
     // GET: Average Price
-    const double get_price() const {return (AsksBook.peek() + BidsBook.peek()) / 2; }
+    double get_price() const 
+    {
+        try
+        {
+            if (!(AsksBook.size() || BidsBook.size())) throw std::runtime_error("Asks or Bids Book is Empty");
+            return (AsksBook.peek() + BidsBook.peek()) / 2; 
+        }
+        catch(const std::exception& e)
+        {
+            std::cerr << "Price Error: " << e.what() << '\n';
+        }
+        return -1;
+    }
 
 private:
     // Order Book
@@ -311,7 +323,7 @@ private:
     // Order Lists
     OrderInfoList OpenOrders; // Open Orders
     OrderInfoList FilledOrders; // Filled Orders
-    OrderInfoList CancledOrders; // Canceled Orders
+    OrderInfoList CanceledOrders; // Canceled Orders
 
     // Concurreny
     std::thread engine;
@@ -528,7 +540,7 @@ private:
             std::cout << "[CANCELED] | " << "ID: " << order->id << " | SIDE: " << _side << " | QTY: " << order->qty << " | PRICE: "
             << order->price << " | TIME: "  << _time << std::endl;
             
-            CancledOrders.insert(
+            CanceledOrders.insert(
                 std::tuple<std::time_t, unsigned int, std::string, double, double> 
                 (_time, order->id, _side, order->initial_qty, order->price)
             );
@@ -541,7 +553,7 @@ private:
 };
 
 // Simulate Random Market Activity
-void simulate_market_activity(OrderEngine& engine, int num_orders = 10000, double base_price = 100.0, double price_range = 100)
+void simulate_market_activity(OrderEngine& engine, int num_orders = 100000, double base_price = 100.0, double price_range = 100)
 {
     std::mt19937_64 rng(std::random_device{}());
     std::uniform_real_distribution<double> price_dist(-price_range, price_range);
@@ -557,7 +569,7 @@ void simulate_market_activity(OrderEngine& engine, int num_orders = 10000, doubl
         engine.place_order(side, qty, price);
     }
 
-    const double avg_price = engine.get_price();
+    double avg_price = engine.get_price();
     std::cout << "ENDING PRICE: " << avg_price << std::endl;
 }
 
