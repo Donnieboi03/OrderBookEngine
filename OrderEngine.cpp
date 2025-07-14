@@ -6,6 +6,7 @@
 #include <thread>
 #include <mutex>
 #include <atomic>
+#include <set>
 #include <map>
 
 // Order Types
@@ -19,23 +20,23 @@ enum side_type
 struct OrderInfo
 {
     const side_type side;
+    double initial_qty;
     double qty;
     double price;
     const unsigned int id;
     const std::time_t time;
     
-
     OrderInfo(const side_type _side, double _qty, double _price, const unsigned int _id, const std::time_t _time) 
-    : qty(_qty), price(_price), side(_side), id(_id), time(_time)
+    : initial_qty(_qty), qty(_qty), price(_price), side(_side), id(_id), time(_time)
     {
-    } 
+    }
 };
 
 // Aliases
 using OrderLevel = std::deque<std::shared_ptr<OrderInfo>>;
 using LevelMap = std::map<double, OrderLevel>;
 using OrderMap = std::map<unsigned int, std::shared_ptr<OrderInfo>>;
-using OrderInfoList = std::vector<std::tuple<unsigned int, std::string, double, double, std::time_t>>;
+using OrderInfoList = std::set<std::tuple<std::time_t, unsigned int, std::string, double, double>>;
 
 // Order Book
 class PriceHeap
@@ -91,9 +92,9 @@ public:
     {
         try{
             if (!heap.size()) throw std::runtime_error("Empty Book");
-            for (auto &x : heap)
+            for (int i = 0; i < heap.size(); i++)
             {
-                if (x == data) return x;
+                if (heap[i] == data) return i;
             }
             throw std::runtime_error("Price Level Does Not Exist");
         }
@@ -158,8 +159,11 @@ public:
     } 
     ~OrderEngine()
     {
+        std::unique_lock<std::mutex> lock(order_lock); 
         engine_running = false;
-        order_cv.notify_one();
+        book_updated = true;
+        order_cv.notify_all();
+        order_cv.wait(lock);
         if (engine.joinable()) engine.join(); 
     }
 
@@ -177,6 +181,11 @@ public:
     
             // Time
             std::time_t _time = time(0);
+
+            // Ensure Ask price is greater than Best Bid
+            if (_side == ASK && BidsBook.size() && (_price < BidsBook.peek())) _price = BidsBook.peek();
+            // Ensure Bid price is less than Best Ask
+            if (_side == BID && AsksBook.size() && (_price > AsksBook.peek())) _price = AsksBook.peek();
     
             // New Order
             std::shared_ptr<OrderInfo> new_order = std::make_shared<OrderInfo>(_side, _qty, _price, _id, _time);
@@ -216,9 +225,11 @@ public:
             }
             notify_open(_id);
             recent_order_id = _id;
-            book_updated.store(true);
-            order_cv.notify_one(); // Wake Matching Engine
-            order_cv.wait(lock, [this]{ return !book_updated.load(); }); // Wait for matching engine
+            book_updated = true;
+            order_cv.notify_all(); // Wake Matching Engine
+            order_cv.wait(lock, [this]{ 
+                return !book_updated; 
+            }); // Wait for matching engine
             return _id;
         }
         catch(std::exception &error)
@@ -274,7 +285,7 @@ public:
             std::cerr << "Order Error: " << error.what() << std::endl;
         }
 
-        book_updated.store(true);
+        book_updated = true;
         order_cv.notify_one(); // Wake Engine
     }
 
@@ -284,6 +295,9 @@ public:
         cancel_order(_id);
         return place_order(_side, _qty, _price);
     }
+
+    // GET: Average Price
+    const double get_price() const {return (AsksBook.peek() + BidsBook.peek()) / 2; }
 
 private:
     // Order Book
@@ -303,8 +317,8 @@ private:
     std::thread engine;
     std::mutex order_lock;
     std::condition_variable order_cv;
-    std::atomic<bool> book_updated;
     std::atomic<bool> engine_running;
+    bool book_updated;
 
     // Random
     std::mt19937_64 gen;
@@ -315,26 +329,45 @@ private:
     {
         while (engine_running.load())
         {
+            // Sleep Lock
+            std::unique_lock<std::mutex> lock(order_lock);
+            order_cv.wait(lock, [this]{ 
+                    return  book_updated; 
+            });
+
             try
             {
-                // Sleep Lock
-                std::unique_lock<std::mutex> lock(order_lock);
-                order_cv.wait(lock, [this]{ return !engine_running.load() || book_updated.load() || (AsksBook.size() && BidsBook.size()); });
-                
+                // If engine is off
+                if (!engine_running)
+                {
+                    throw std::runtime_error("Engine Turned Off");
+                }
+
+                // If recent order is not Open
+                if (OrderTable.find(recent_order_id) == OrderTable.end())
+                {
+                    throw std::runtime_error("No Recent Order");
+                }
+
                 // If Asks or Bids is Empty Continue
-                if (!(AsksBook.size() && BidsBook.size())) throw std::runtime_error("Asks or Bids is empty");
-                
-                // Get best asks and bids
-                const double best_asks_price = AsksBook.peek();
-                const double best_bids_price = BidsBook.peek();
-                // Get price level for best asks and bids
-                OrderLevel &best_level_asks = AskLevels[best_asks_price];
-                OrderLevel &best_level_bids = BidLevels[best_bids_price];
+                if (!(AsksBook.size() && BidsBook.size()))
+                {
+                    throw std::runtime_error("Asks or Bids Book is Empty");
+                }
+
                 
                 // Get Recent Order
                 std::shared_ptr<OrderInfo> recent_order = OrderTable[recent_order_id];
-                while (recent_order->qty)
+                while (recent_order && recent_order->qty)
                 {
+                    // Get best asks and bids
+                    const double best_asks_price = AsksBook.peek();
+                    const double best_bids_price = BidsBook.peek();
+                    
+                    // Get price level for best asks and bids
+                    OrderLevel &best_level_asks = AskLevels[best_asks_price];
+                    OrderLevel &best_level_bids = BidLevels[best_bids_price];
+                    
                     // Break If you can't trade
                     bool can_trade_asks = recent_order->side == ASK && !best_level_bids.empty() && best_level_bids.front()->price >= recent_order->price;
                     bool can_trade_bids = recent_order->side == BID && !best_level_asks.empty() && best_level_asks.front()->price <= recent_order->price;
@@ -369,150 +402,168 @@ private:
                 std::cerr << "Matching Warning: " << error.what() << std::endl;
             }
 
-            book_updated.store(false);
+            book_updated = false;
             order_cv.notify_one(); // Notify that the order has been processed
         }
     }
 
     // Match Orders
     void matching(std::shared_ptr<OrderInfo> best_ask, std::shared_ptr<OrderInfo> best_bid, OrderLevel &best_level_asks, OrderLevel &best_level_bids)
-    {
-        // Fill bid then Notify Order
-        if (best_ask->qty > best_bid->qty)
-        {
-            double qty_filled = best_bid->qty;
-            best_ask->qty -= best_bid->qty;
-            best_bid->qty = 0;
-            notify_fill(best_bid->id, qty_filled);
-            best_level_bids.pop_front();
-            OrderTable.erase(best_bid->id);
-
-        } 
-        // Fill ask then Notify Order
-        else if (best_ask->qty < best_bid->qty)
-        {
-            double qty_filled = best_ask->qty;
-            best_bid->qty -= best_ask->qty;
-            best_ask->qty = 0;
-            notify_fill(best_ask->id, qty_filled);
-            best_level_asks.pop_front();
-            OrderTable.erase(best_ask->id);
-
-        } 
-        // Fill bid and ask then Notify Orders
-        else
-        {   
-            double qty_filled = best_ask->qty;
-            best_ask->qty = 0;
-            best_bid->qty = 0;
-            notify_fill(best_ask->id, qty_filled);
-            notify_fill(best_bid->id, qty_filled);
-            best_level_asks.pop_front();
-            best_level_bids.pop_front();
-            OrderTable.erase(best_ask->id);
-            OrderTable.erase(best_bid->id);
-
-        }
+    {   
+        // Get qty filled and apply difference
+        double qty_filled = std::min(best_ask->qty, best_bid->qty);
+        best_ask->qty -= qty_filled;
+        best_bid->qty -= qty_filled;
         
-        // If best asks level is empty then pop level and erase price map
-        if (!best_level_asks.size())
+        // If ask qty is 0 then notify fill and erase
+        if (!best_ask->qty)
         {
-            AsksBook.pop();
-            AskLevels.erase(best_ask->price);
+            notify_fill(best_ask->id, qty_filled);
+            best_level_asks.pop_front();
+            OrderTable.erase(best_ask->id);
+            // If ask level is now empty then erase level
+            if (!best_level_asks.size())
+            {
+                AsksBook.pop();
+                AskLevels.erase(best_ask->price);
+            }
         }
-        // If best bids level is empty then pop level and erase price map
-        if (!best_level_bids.size())
+
+        // If ask qty is 0 then notify fill and erase
+        if (!best_bid->qty)
         {
-            BidsBook.pop();
-            BidLevels.erase(best_bid->price);
+            notify_fill(best_bid->id, qty_filled);
+            best_level_bids.pop_front();
+            OrderTable.erase(best_bid->id);
+            // If ask level is now empty then erase level
+            if (!best_level_bids.size())
+            {
+                BidsBook.pop();
+                BidLevels.erase(best_bid->price);
+            }
         }
     }
 
     // Notify of what Orders are open
     void notify_open(const unsigned int _id)
     {
-        std::shared_ptr<OrderInfo> order = OrderTable[_id];
-        std::string _side = order->side == BID ? "BUY" : "SELL";
-        std::time_t _time = time(0);
+        try
+        {
+            if (OrderTable.find(_id) == OrderTable.end()) throw std::runtime_error("Could Not Find Open Order");
+            std::shared_ptr<OrderInfo> order = OrderTable[_id];
+            std::string _side = order->side == BID ? "BUY" : "SELL";
 
-        // Notification
-        std::cout << "[OPEN] | " << "ID: " << order->id << " | SIDE: " << _side << " | QTY: " << order->qty << " | PRICE: "
-        << order->price << " | TIME: "  << _time << std::endl;
+            // Notification
+            std::cout << "[OPEN] | " << "ID: " << order->id << " | SIDE: " << _side << " | QTY: " << order->qty << " | PRICE: "
+            << order->price << " | TIME: "  << order->time << std::endl;
 
-        std::tuple<const unsigned int, std::string, const double, const double, const std::time_t> 
-        open_order( order->id, _side, order->qty, order->price, _time);
-        OpenOrders.push_back(open_order);
+            OpenOrders.insert(
+                std::tuple<std::time_t, unsigned int, std::string, double, double> 
+                (order->time, order->id, _side, order->initial_qty, order->price)
+            );
+        }
+        catch (std::exception &error)
+        {
+            std::cout << error.what() << std::endl;
+        }
     }
 
     // Notify of what Orders were filled
     void notify_fill(const unsigned int _id, const double qty_filled)
     {
-        // Remove Order from OpenOrders List
-        for (int i = 0; i < OpenOrders.size(); i++)
-        {
-            unsigned int open_id = std::get<0>(OpenOrders[i]);
-            if (open_id == _id)
-            {
-                OpenOrders.erase(OpenOrders.begin() + i);
-                break;
-            }
+        try{
+            if (OrderTable.find(_id) == OrderTable.end()) throw std::runtime_error("Could Not Find Open Order");
+            std::shared_ptr<OrderInfo> order = OrderTable[_id];
+            std::string _side = order->side == BID ? "BUY" : "SELL";
+            
+            // Remove Order from OpenOrders Set
+            auto open_order = OpenOrders.find(
+                std::tuple<std::time_t, unsigned int, std::string, double, double>
+                (order->time , order->id, _side, order->initial_qty, order->price)
+            );
 
+            if (open_order != OpenOrders.end()) OpenOrders.erase(open_order);
+            else throw std::runtime_error("Could Not Find Open Order");
+            
+            // Time Order was Filled
+            std::time_t _time = time(0);
+            
+            // Notification
+            std::cout << "[FILLED] | " << "ID: " << order->id << " | SIDE: " << _side << " | QTY: " << qty_filled << " | PRICE: "
+            << order->price << " | TIME: "  << _time << std::endl;
+            
+            FilledOrders.insert(
+                std::tuple<std::time_t, unsigned int, std::string, double, double> 
+                (_time, order->id, _side, qty_filled, order->price)
+            );
         }
-
-        std::shared_ptr<OrderInfo> order = OrderTable[_id];
-        std::string _side = order->side == BID ? "BUY" : "SELL";
-        std::time_t _time = time(0);
-        
-        // Notification
-        std::cout << "[FILLED] | " << "ID: " << order->id << " | SIDE: " << _side << " | QTY: " << qty_filled << " | PRICE: "
-        << order->price << " | TIME: "  << _time << std::endl;
-        
-        std::tuple<const unsigned int, std::string, const double, const double, const std::time_t> 
-        filled_order( order->id, _side, qty_filled, order->price, _time);
-        FilledOrders.push_back(filled_order);
+        catch (std::exception &error)
+        {
+            std::cout << "Notify Error: " << error.what() << std::endl;
+        }
     }
 
     // Notify of what Orders were canceled
     void notify_cancel(const unsigned int _id)
     {
-        // Remove Order from OpenOrders List
-        for (int i = 0; i < OpenOrders.size(); i++)
+        try
         {
-            unsigned int open_id = std::get<0>(OpenOrders[i]);
-            if (open_id == _id)
-            {
-                OpenOrders.erase(OpenOrders.begin() + i);
-                break;
-            }
-        }
+            if (OrderTable.find(_id) == OrderTable.end()) throw std::runtime_error("Could Not Find Open Order");
+            std::shared_ptr<OrderInfo> order = OrderTable[_id];
+            std::string _side = order->side == BID ? "BUY" : "SELL";
+            
+            // Remove Order from OpenOrders Set
+            auto open_order = OpenOrders.find(
+                std::tuple<std::time_t, unsigned int, std::string, double, double>
+                (order->time ,order->id, _side, order->initial_qty, order->price)
+            );
 
-        std::shared_ptr<OrderInfo> order = OrderTable[_id];
-        std::string _side = order->side == BID ? "BUY" : "SELL";
-        std::time_t _time = time(0);
-        
-        // Notification
-        std::cout << "[CANCELED] | " << "ID: " << order->id << " | SIDE: " << _side << " | QTY: " << order->qty << " | PRICE: "
-        << order->price << " | TIME: "  << _time << std::endl;
-        
-        std::tuple<const unsigned int, std::string, const double, const double, const std::time_t> 
-        canceled_order( order->id, _side, order->qty, order->price, _time);
-        CancledOrders.push_back(canceled_order);
+            if (open_order != OpenOrders.end()) OpenOrders.erase(open_order);
+            else throw std::runtime_error("Could Not Find Open Order");
+            
+            // Time Order was Canceled
+            std::time_t _time = time(0);
+            
+            // Notification
+            std::cout << "[CANCELED] | " << "ID: " << order->id << " | SIDE: " << _side << " | QTY: " << order->qty << " | PRICE: "
+            << order->price << " | TIME: "  << _time << std::endl;
+            
+            CancledOrders.insert(
+                std::tuple<std::time_t, unsigned int, std::string, double, double> 
+                (_time, order->id, _side, order->initial_qty, order->price)
+            );
+        }
+        catch (std::exception &error)
+        {
+            std::cout << error.what() << std::endl;
+        }
     }
 };
+
+// Simulate Random Market Activity
+void simulate_market_activity(OrderEngine& engine, int num_orders = 10000, double base_price = 100.0, double price_range = 100)
+{
+    std::mt19937_64 rng(std::random_device{}());
+    std::uniform_real_distribution<double> price_dist(-price_range, price_range);
+    std::uniform_real_distribution<double> qty_dist(1, 100);
+    std::uniform_int_distribution<int> side_dist(0, 1); // 0 = BID, 1 = ASK
+ 
+    for (int i = 0; i < num_orders; ++i)
+    {
+        double price = base_price + price_dist(rng);
+        double qty = qty_dist(rng);
+        side_type side = static_cast<side_type>(side_dist(rng));
+    
+        engine.place_order(side, qty, price);
+    }
+
+    const double avg_price = engine.get_price();
+    std::cout << "ENDING PRICE: " << avg_price << std::endl;
+}
+
 
 int main()
 {    
     OrderEngine OrderEngine;
-    unsigned int _id = 0;
-    // // Place 100 Bids from 1 - 100 qty
-    for (int i = 0; i < 100; i++)
-    {
-       _id = OrderEngine.place_order(BID, i + 1, 100);
-    }
-    OrderEngine.cancel_order(_id);
-    // Place 100 Asks from 100 - 1 qty
-    for (int i = 100; i >= 1; i--)
-    {
-        OrderEngine.place_order(ASK, i, 100);
-    }
+    simulate_market_activity(OrderEngine);
 }
