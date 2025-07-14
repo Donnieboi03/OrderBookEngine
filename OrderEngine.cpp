@@ -34,8 +34,8 @@ struct OrderInfo
 
 // Aliases
 using OrderLevel = std::deque<std::shared_ptr<OrderInfo>>;
-using LevelMap = std::map<double, OrderLevel>;
-using OrderMap = std::map<unsigned int, std::shared_ptr<OrderInfo>>;
+using LevelMap = std::unordered_map<double, OrderLevel>;
+using OrderMap = std::unordered_map<unsigned int, std::shared_ptr<OrderInfo>>;
 using OrderInfoList = std::set<std::tuple<std::time_t, unsigned int, std::string, double, double>>;
 
 // Order Book
@@ -195,13 +195,8 @@ public:
             case ASK:
                 {
                     // Create new ask price level if no price level
-                    if (AskLevels.find(_price) == AskLevels.end())
-                    {
-                        OrderLevel new_level;
-                        AsksBook.push(_price);
-                        AskLevels[_price] = new_level;
-                    }
                     AskLevels[_price].push_back(new_order);
+                    if (AskLevels.size() == 1) AsksBook.push(_price);
                     OrderTable[_id] = new_order;
                     break;
                 }
@@ -209,13 +204,8 @@ public:
             case BID:
                 {
                     // Create new bid price level if no price level
-                    if (BidLevels.find(_price) == BidLevels.end())
-                    {
-                        OrderLevel new_level;
-                        BidsBook.push(_price);
-                        BidLevels[_price] = new_level;
-                    }
                     BidLevels[_price].push_back(new_order);
+                    if (BidLevels.size() == 1) BidsBook.push(_price);
                     OrderTable[_id] = new_order;
                     break;
                 }
@@ -249,21 +239,20 @@ public:
             if (OrderTable.find(_id) == OrderTable.end()) throw("Order Does Not Exist");
             
             std::shared_ptr<OrderInfo> order = OrderTable[_id];
-            
             // Get price level for best asks and bids
-            OrderLevel *order_level = order->side == BID ?
-            &BidLevels[order->price] : &AskLevels[order->price];
+            OrderLevel &order_level = (order->side == BID) ?
+            BidLevels[order->price] : AskLevels[order->price];
 
             // Iterate thruogh order level filtering out ORDER ID
             OrderLevel new_level;
-            for (auto& cur_order : *order_level)
+            for (auto &cur_order : order_level)
             {
                 if (cur_order->id != _id) new_level.push_back(cur_order);
             }
-            *order_level = std::move(new_level);
+            order_level = std::move(new_level);
 
             // If Order Level is empty pop from Book and erase Order Level
-            if (order_level->empty())
+            if (order_level.empty())
             {
                     if (order->side == BID)
                 {
@@ -311,6 +300,45 @@ public:
         return -1;
     }
 
+    // GET: Best Ask
+    double get_best_ask() const 
+    {
+        try
+        {
+            if (!AsksBook.size()) throw std::runtime_error("Asks Book is Empty");
+            return AsksBook.peek();
+        }
+        catch(const std::exception& e)
+        {
+            std::cerr << "Price Error: " << e.what() << '\n';
+        }
+        return -1;
+    }
+
+    // GET: Best Bid
+    double get_best_bid() const 
+    {
+        try
+        {
+            if (!BidsBook.size()) throw std::runtime_error("Bids Book is Empty");
+            return BidsBook.peek();
+        }
+        catch(const std::exception& e)
+        {
+            std::cerr << "Price Error: " << e.what() << '\n';
+        }
+        return -1;
+    }
+
+    // GET: Open Orders
+    OrderInfoList get_open_orders() const { return OpenOrders; }
+    
+    // GET: Filled Orders
+    OrderInfoList get_filled_orders() const { return FilledOrders; }
+    
+    // GET: Canceled Orders
+    OrderInfoList get_canceled_orders() const { return CanceledOrders; }
+
 private:
     // Order Book
     PriceHeap AsksBook; // Asks Order Book
@@ -350,23 +378,13 @@ private:
             try
             {
                 // If engine is off
-                if (!engine_running)
-                {
-                    throw std::runtime_error("Engine Turned Off");
-                }
+                if (!engine_running) throw std::runtime_error("Engine Turned Off");
 
                 // If recent order is not Open
-                if (OrderTable.find(recent_order_id) == OrderTable.end())
-                {
-                    throw std::runtime_error("No Recent Order");
-                }
+                if (OrderTable.find(recent_order_id) == OrderTable.end()) throw std::runtime_error("No Recent Order");
 
                 // If Asks or Bids is Empty Continue
-                if (!(AsksBook.size() && BidsBook.size()))
-                {
-                    throw std::runtime_error("Asks or Bids Book is Empty");
-                }
-
+                if (!(AsksBook.size() && BidsBook.size())) throw std::runtime_error("Asks or Bids Book is Empty");
                 
                 // Get Recent Order
                 std::shared_ptr<OrderInfo> recent_order = OrderTable[recent_order_id];
@@ -553,7 +571,7 @@ private:
 };
 
 // Simulate Random Market Activity
-void simulate_market_activity(OrderEngine& engine, int num_orders = 100000, double base_price = 100.0, double price_range = 100)
+void simulate_market_activity(OrderEngine& engine, int num_orders = 10000, double base_price = 100.0, double price_range = 100)
 {
     std::mt19937_64 rng(std::random_device{}());
     std::uniform_real_distribution<double> price_dist(-price_range, price_range);
