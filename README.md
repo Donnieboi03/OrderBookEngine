@@ -48,6 +48,3 @@ A **multithreaded**, **low-latency** matching engine built from scratch in moder
 | `<memory>` | Smart pointers for order tracking |
 
 ---
-
-## 📈 Example Output
-
