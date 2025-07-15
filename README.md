@@ -1,4 +1,4 @@
-# ⚙️ Jarvis Matching Engine – High-Performance C++ Order Book
+# ⚙️ High-Performance C++ Order Book Matching Engine
 
 A **multithreaded**, **low-latency** matching engine built from scratch in modern C++. Jarvis simulates a financial exchange order book using custom heap-based price levels, real-time trade matching, and concurrency-safe order handling. Designed for simulation, backtesting, and educational purposes in algorithmic or high-frequency trading environments.
 
