@@ -41,9 +41,9 @@ A **multithreaded**, **low-latency** matching engine built from scratch in moder
 
 | Library | Use |
 |--------|-----|
-| `<thread>` / `<mutex>` | Safe multithreading |
+| `<thread>` / `<mutex>` / `atomic`| Safe multithreading |
 | `<vector>`, `<deque>` | Price and order levels |
-| `<map>`, `<unordered_map>` | Efficient data indexing |
+| `<map>`, `<set>` | Efficient data indexing |
 | `<random>` | Randomized simulation |
 | `<memory>` | Smart pointers for order tracking |
 
