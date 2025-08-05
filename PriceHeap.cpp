@@ -24,45 +24,25 @@ public:
 
     void pop(const int index = 0)
     {
-        try{
             if (!heap.size()) 
-                throw std::runtime_error("Empty Book");
+                return;
             std::swap(heap[index], heap[heap.size() - 1]);
             heap.pop_back();
             heapify_down(index);
-        }
-        catch(std::exception &error)
-        {
-            std::cerr << "Heap Warning: " << error.what() << std::endl;
-        }
     }
 
     double peek() const 
     { 
-        try{
-            if (!heap.size()) 
-                throw std::runtime_error("Empty Book");
-            return heap[0]; 
-        }
-        catch(std::exception &error)
-        {
-            std::cerr << "Heap Warning: " << error.what() << std::endl;
-        }
-        return -1;
+        if (!heap.size()) 
+            return -1;
+        return heap[0]; 
     }
 
     double at(const int index) const
     {
-        try{
-            if (!heap.size()) 
-                throw std::runtime_error("Empty Book");
-            return heap[index]; 
-        }
-        catch(std::exception &error)
-        {
-            std::cerr << "Heap Warning: " << error.what() << std::endl;
-        }
-        return -1;
+        if (!heap.size()) 
+            return -1;
+        return heap[index]; 
     }
 
     int find(double data) const
