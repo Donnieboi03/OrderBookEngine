@@ -1,17 +1,19 @@
 # ⚙️ High-Performance C++ Order Book Matching Engine
 
-A **multithreaded**, **low-latency** matching engine built from scratch in modern C++. Jarvis simulates a financial exchange order book using custom heap-based price levels, real-time trade matching, and concurrency-safe order handling. Designed for simulation, backtesting, and educational purposes in algorithmic or high-frequency trading environments.
+A **multithreaded**, **low-latency** order book engine built from scratch in modern C++ for **market microstructure simulation**.  
+This engine powers a simulated financial exchange capable of handling **concurrent order flows, real-time trade matching**, and **Monte Carlo-driven market activity**.
 
 ---
 
 ## 🚀 Key Features
 
 ### 💡 Core Functionality
-- **Custom Heap-based Price Management**  
-  Dual min/max heaps for ask/bid order books with dynamic `heapify_up`/`heapify_down` logic.
+### 🧪 Simulation Tools
+- **Monte Carlo Simulation Module**  
+  `monte_carlo_simulation()` generates thousands of randomized BID/ASK orders for generating orderbook microstructure.
   
-- **Limit Order Matching Engine**  
-  Full support for limit orders (BID/ASK) with quantity-based matching.
+- **Limit/Market Order Matching Engine**  
+  Full support for limit and market orders (BID/ASK) with quantity-based matching.
 
 - **Thread-Safe Execution**  
   Uses `std::thread`, `std::mutex`, and `std::condition_variable` to ensure safe concurrent access.
@@ -23,17 +25,13 @@ A **multithreaded**, **low-latency** matching engine built from scratch in moder
 
 ### 📡 Real-Time Monitoring
 - **Live Notifications**  
-  Console outputs for all order events (`[OPEN]`, `[FILLED]`, `[CANCELED]`).
+  Console outputs for all order events (`[OPEN]`, `[FILLED]`, `[PARTIALY FILLED]`,`[CANCELED]`).
 
-- **Order History Tracking**  
-  Maintains sets for open, filled, and canceled orders.
+- **Custom Heap-based Price Management**  
+  Dual min/max heaps for ask/bid order books with dynamic `heapify_up`/`heapify_down` logic.
 
 - **Recent Price Metrics**  
   Functions like `get_price()`, `get_best_bid()`, and `get_best_ask()` return accurate current levels.
-
-### 🧪 Simulation Tools
-- **Market Simulation Module**  
-  `simulate_market_activity()` generates thousands of randomized BID/ASK orders for testing.
 
 ---
 
