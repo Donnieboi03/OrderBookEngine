@@ -8,13 +8,6 @@ This engine powers a simulated financial exchange capable of handling **concurre
 ## 🚀 Key Features
 
 ### 💡 Core Functionality
-### 🧪 Simulation Tools
-- **Monte Carlo Simulation Module**  
-  `monte_carlo_simulation()` generates thousands of randomized BID/ASK orders for generating orderbook microstructure.
-  
-- **Limit/Market Order Matching Engine**  
-  Full support for limit and market orders (BID/ASK) with quantity-based matching.
-
 - **Thread-Safe Execution**  
   Uses `std::thread`, `std::mutex`, and `std::condition_variable` to ensure safe concurrent access.
 
@@ -22,6 +15,13 @@ This engine powers a simulated financial exchange capable of handling **concurre
   - `place_order()`: Submit a new buy/sell order  
   - `cancel_order()`: Cancel open orders by ID  
   - `edit_order()`: Modify price or quantity of existing orders
+    
+- **Limit/Market Order Matching Engine**  
+  Full support for limit and market orders (BID/ASK) with quantity-based matching.
+
+### 🧪 Simulation Tools
+- **Monte Carlo Simulation Module**  
+  `monte_carlo_simulation()` generates thousands of randomized BID/ASK orders for generating orderbook microstructure.
 
 ### 📡 Real-Time Monitoring
 - **Live Notifications**  
