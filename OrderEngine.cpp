@@ -14,7 +14,8 @@ enum class OrderStatus
 {
     OPEN,
     FILLED,
-    CANCELLED
+    CANCELLED,
+    REJECTED
 };
 
 // Order Types
@@ -57,21 +58,16 @@ using OrderMap = std::unordered_map<unsigned int, std::shared_ptr<OrderInfo>>;
 class OrderEngine
 {
 public:
-    OrderEngine() 
-    : engine_running(true), book_updated(false), recent_order_id(0), next_order_id(1), AsksBook(true), BidsBook(false), vebose(true)
+    // Default Constructor
+    OrderEngine(const std::string& _ticker) 
+    : engine_running(true), book_updated(false), recent_order_id(0), next_order_id(1), AsksBook(true), BidsBook(false), vebose(true), ticker(_ticker)
     {
         engine = std::thread(&OrderEngine::matching_engine, this);
     } 
-   
-    OrderEngine(bool _verbose) 
-    : engine_running(true), book_updated(false), recent_order_id(0), next_order_id(1), AsksBook(true), BidsBook(false), vebose(_verbose)
-    {
-        engine = std::thread(&OrderEngine::matching_engine, this);
-    } 
-   
-    OrderEngine(double _starting_price, bool _verbose) 
-    : engine_running(true), book_updated(false), recent_order_id(0), next_order_id(1), 
-    AsksBook(true), BidsBook(false), vebose(_verbose), starting_price(_starting_price)
+
+    // Verbose Specifier
+    OrderEngine(const std::string& _ticker, bool _verbose) 
+    : engine_running(true), book_updated(false), recent_order_id(0), next_order_id(1), AsksBook(true), BidsBook(false), vebose(_verbose), ticker(_ticker)
     {
         engine = std::thread(&OrderEngine::matching_engine, this);
     } 
@@ -88,21 +84,12 @@ public:
     }
 
     // POST: Place Limit Order
-    unsigned int place_order(const OrderSide _side, const OrderType _type, double _qty, double _price = -1)
+    unsigned int place_order(const OrderSide _side, const OrderType _type,double _price, double _qty)
     {
         // Mutex
         std::unique_lock<std::mutex> lock(order_lock);
         
-        // New Order ID
-        const unsigned int _id = next_order_id++;
-        
-        if (_type == OrderType::MARKET) 
-        {
-            if (_side == OrderSide::ASK && !BidsBook.size())
-                return 0; // No bids to match with
-            if (_side == OrderSide::BID && !AsksBook.size())
-                return 0; // No asks to match with
-        }
+        const unsigned int _id = next_order_id++; // New Order ID
 
         // New Order
         std::shared_ptr<OrderInfo> new_order;
@@ -110,9 +97,10 @@ public:
         {
             case OrderType::LIMIT: // Limit Order
                 {
-                    if (_side == OrderSide::ASK && _price < BidsBook.peek())
+                    // If Limit Order is above (BID) or below (ASK) best opposing price, then adjust
+                    if (_side == OrderSide::ASK && BidsBook.size() && _price < BidsBook.peek())
                         _price = BidsBook.peek(); // Adjust price to best bid
-                    else if (_side == OrderSide::BID && _price > AsksBook.peek())
+                    else if (_side == OrderSide::BID && AsksBook.size() && _price > AsksBook.peek())
                         _price = AsksBook.peek(); // Adjust price to best ask
                     new_order = std::make_shared<OrderInfo>(_side, OrderType::LIMIT, _qty, _price, _id);
                     break;
@@ -120,8 +108,8 @@ public:
 
            case OrderType::MARKET: // Market Order
                 {
-                    // If Market Order, get best price from opposite book
-                    double _price = _side == OrderSide::ASK ? BidsBook.peek() : AsksBook.peek();
+                    // If Market Order, then get best opposing price
+                    _price = _side == OrderSide::ASK ? BidsBook.peek() : AsksBook.peek();
                     new_order = std::make_shared<OrderInfo>(_side, OrderType::MARKET, _qty, _price, _id);
                     break;
                 }
@@ -129,7 +117,25 @@ public:
             default:
                 return 0; // Invalid Order Type
         }
-            
+        
+        OrderTable[_id] = new_order; // Key New Order
+
+        // Valid Market
+        if (_type == OrderType::MARKET) 
+        {
+            if (_side == OrderSide::ASK && !BidsBook.size())
+            {
+                notify_reject(_id, "NO MARKET LIQUIDITY (BIDS)");
+                return 0; // No bids to match with
+            }
+            if (_side == OrderSide::BID && !AsksBook.size())
+            {
+                notify_reject(_id, "NO MARKET LIQUIDITY (ASKS)");
+                return 0; // No asks to match with
+            }
+        }
+        
+        // Place Order
         switch (_side)
         {
             case OrderSide::ASK:
@@ -141,7 +147,6 @@ public:
                         AskLevels[_price] = OrderLevel();
                     }
                     AskLevels[_price].push_back(new_order);
-                    OrderTable[_id] = new_order;
                     break;
                 }
             
@@ -154,7 +159,6 @@ public:
                         BidLevels[_price] = OrderLevel();
                     }
                     BidLevels[_price].push_back(new_order);
-                    OrderTable[_id] = new_order;
                     break;
                 }
             
@@ -184,15 +188,12 @@ public:
         if (OrderTable.find(_id) == OrderTable.end()) 
             return false; // Order does not exist;
         
-        std::shared_ptr<OrderInfo>& order = OrderTable[_id];
+        auto& order = OrderTable[_id];
         if (order->status != OrderStatus::OPEN || order->type != OrderType::LIMIT)
-            return false; // Order is not open or not a limit order
-
-        if (order->side != OrderSide::BID && order->side != OrderSide::ASK)
-            return false; // Invalid Order Side
+            return false; // Order is not open and not a limit order
 
         // Get Order Level based on Order Side
-        OrderLevel& order_level = (order->side == OrderSide::BID) ?
+        auto& order_level = (order->side == OrderSide::BID) ?
         BidLevels[order->price] : AskLevels[order->price];
 
         // Iterate thruogh order level filtering out ORDER ID
@@ -209,13 +210,27 @@ public:
             switch(order->side)
             {
                 case OrderSide::BID:
-                    BidsBook.pop(BidsBook.find(order->price));
-                    BidLevels.erase(order->price);
+                {
+                    const auto& bid = BidsBook.find(order->price);
+                    if (bid != -1)
+                    {
+                        BidsBook.pop(bid);
+                        BidLevels.erase(order->price);
+                    }
                     break;
+                }
+
                 case OrderSide::ASK:
-                    AsksBook.pop(AsksBook.find(order->price));
-                    AskLevels.erase(order->price);
+                {
+                    const auto& ask = AsksBook.find(order->price);
+                    if (ask != -1)
+                    {
+                        AsksBook.pop(ask);
+                        AskLevels.erase(order->price);
+                    }
                     break;
+                }
+
                 default:
                     return false; // Invalid Order Side
             }
@@ -232,7 +247,7 @@ public:
     }
 
     // PATCH: Edit Order
-    unsigned int edit_order(const unsigned int _id, const OrderSide _side, const double _qty, const double _price)
+    unsigned int edit_order(const unsigned int _id, const OrderSide _side, const double _price, const double _qty)
     {
         if (!cancel_order(_id))
             return 0; // If cancel failed
@@ -247,12 +262,16 @@ public:
                 return nullptr; // Return nullptr if order not found
             return order->second; 
     }
-    
+
     // GET: Average Price
     double get_price() const 
     {
-        if (!(AsksBook.size() || BidsBook.size())) 
-            return starting_price; // If no orders, return starting price
+        if (!BidsBook.size() && !AsksBook.size())
+            return -1; // If both books are empty
+        else if (!BidsBook.size())
+            return AsksBook.peek(); // If BidBook is empty
+        else if (!AsksBook.size())
+            return BidsBook.peek(); // If AskBook is Empty
         return (AsksBook.peek() + BidsBook.peek()) / 2; // Average of best ask and bid
     }
 
@@ -270,18 +289,66 @@ public:
         return BidsBook.peek();
     }
 
-    // New: Get orders by status
-    std::vector<std::shared_ptr<OrderInfo>> get_orders_by_status(OrderStatus status) const {
+    // GET: Orders by Status
+    std::vector<std::shared_ptr<OrderInfo>> get_orders_by_status(OrderStatus status) const 
+    {
         std::vector<std::shared_ptr<OrderInfo>> result;
-        for (const auto& [id, order] : OrderTable) {
+        for (const auto& [id, order] : OrderTable) 
+        {
             if (order->status == status)
                 result.push_back(order);
         }
-        return result;
+        return std::move(result);
     }
     
-    // TODO: (GET: Maket Depth)
-    std::vector<std::pair<double, std::size_t>> get_market_depth(OrderSide _side, std::size_t _depth = 10) const;
+    // GET: Maket Depth
+    std::vector<std::pair<double, std::size_t>> get_market_depth(OrderSide _side, std::size_t _depth = 10) const
+    {
+        std::vector<std::pair<double, std::size_t>> depth;
+
+        switch(_side)
+        {
+            case OrderSide::BID:
+                {
+                    auto tmp_book = BidsBook; // Copy BidsBook
+                    for (size_t i = 0; i < _depth && tmp_book.size(); ++i)
+                    {
+                        double best_bid = tmp_book.peek(); // Get Best Bid Price
+                        const auto& best_level = BidLevels.at(best_bid); // Get Best Bid Level
+
+                        double total_qty = 0;
+                        // Sum up all Quantities on current price level
+                        for (auto& order : best_level)
+                            total_qty += order->qty;
+
+                        depth.emplace_back(best_bid, total_qty);
+                        tmp_book.pop();
+                    }
+                    break;
+                }
+
+            case OrderSide::ASK:
+                {
+                    auto tmp_book = AsksBook; // Copy AsksBook
+                    for (size_t i = 0; i < _depth && tmp_book.size(); ++i)
+                    {
+                        double best_ask = tmp_book.peek(); // Get Best Ask Price
+                        const auto& best_level = AskLevels.at(best_ask); // Get Best Ask Level
+
+                        double total_qty = 0;
+                        // Sum up all Quantities on current price level
+                        for (auto& order : best_level)
+                            total_qty += order->qty;
+
+                        depth.emplace_back(best_ask, total_qty);
+                        tmp_book.pop();
+                    }
+                    break;
+                }
+        }
+       
+        return std::move(depth);
+    }
 
 private:
     // Order Book
@@ -301,7 +368,7 @@ private:
     bool book_updated;
 
     bool vebose; // Verbose Mode
-    double starting_price; // Starting Price
+    std::string ticker; // Ticker
 
     // Matching Engine
     void matching_engine()
@@ -311,17 +378,18 @@ private:
             // Sleep Lock
             std::unique_lock<std::mutex> lock(order_lock);
             order_cv.wait(lock, [this]{ 
-                    return  book_updated; 
+                    return  !engine_running || book_updated; 
             });
             
             auto is_recent_order = OrderTable.find(recent_order_id) != OrderTable.end();
             auto is_books = AsksBook.size() && BidsBook.size();
-
+            // Attempt to Match only if engine is running, there is a recent order placed, and there are orders on both sides
             if (engine_running && is_recent_order && is_books)
             {
                 // Get Recent Order
-                std::shared_ptr<OrderInfo> recent_order = OrderTable[recent_order_id];
-                while (recent_order && recent_order->status == OrderStatus::OPEN && recent_order->qty)
+                std::shared_ptr<OrderInfo>& recent_order = OrderTable[recent_order_id];
+                // Match order while order status is Open and there is a qty
+                while (recent_order->status == OrderStatus::OPEN && recent_order->qty)
                 {
                     // Get best asks and bids
                     const double& best_asks_price = AsksBook.peek();
@@ -416,11 +484,12 @@ private:
         const std::shared_ptr<OrderInfo>& order = OrderTable[_id];
         const std::string _side = order->side == OrderSide::BID ? "BUY" : "SELL";
         const std::string _type = order->type == OrderType::LIMIT ? "LIMIT" : "MARKET";
+        const std::string ticker_msg = "[" + ticker + "]";
         order->status = OrderStatus::OPEN; // Update Order Status
         
         // Notification
         if (!vebose) return; // If not verbose, do not notify
-        std::cout << "[OPEN] | " << "TYPE: " << _type << " | ID: " << order->id << " | SIDE: " << _side << 
+        std::cout << ticker_msg << " | " << "[OPEN] | " << "TYPE: " << _type << " | ID: " << order->id << " | SIDE: " << _side << 
         " | QTY: " << order->qty << " | PRICE: " << order->price << " | TIME: "  << order->time << std::endl;
     }
 
@@ -434,7 +503,7 @@ private:
         const std::string _side = order->side == OrderSide::BID ? "BUY" : "SELL";
         const std::string _type = order->type == OrderType::LIMIT ? "LIMIT" : "MARKET";
         const std::string status = !order->qty ? "[FILLED]" : "[PARTIALLY FILLED]";
-
+        const std::string ticker_msg = "[" + ticker + "]";
         if (!order->qty)
             order->status = OrderStatus::FILLED; // Update Order Status
 
@@ -443,7 +512,7 @@ private:
         
         // Notification
         if (!vebose) return; // If not verbose, do not notify
-        std::cout << status << " | " << "TYPE: " << _type << " | ID: " << order->id << " | SIDE: " << _side << 
+        std::cout << ticker_msg << " | " << status << " | " << "TYPE: " << _type << " | ID: " << order->id << " | SIDE: " << _side << 
         " | QTY: " << qty_filled << " | PRICE: " << order->price << " | TIME: "  << _time << std::endl;
     }
 
@@ -454,8 +523,9 @@ private:
             throw std::runtime_error("Could Not Find Cancelled Order");
 
         const std::shared_ptr<OrderInfo>& order = OrderTable[_id];
-        const std::string& _side = order->side == OrderSide::BID ? "BUY" : "SELL";
+        const std::string _side = order->side == OrderSide::BID ? "BUY" : "SELL";
         const std::string _type = order->type == OrderType::LIMIT ? "LIMIT" : "MARKET";
+        const std::string ticker_msg = "[" + ticker + "]";
         order->status = OrderStatus::CANCELLED; // Update Order Status
 
         // Time Order was Canceled
@@ -463,7 +533,29 @@ private:
         
         // Notification
         if (!vebose) return; // If not verbose, do not notify
-        std::cout << "[CANCELED] | " << "TYPE: " << _type << " | ID: " << order->id << " | SIDE: " << _side << 
+        std::cout << ticker_msg << " | " << "[CANCELED] | " << "TYPE: " << _type << " | ID: " << order->id << " | SIDE: " << _side << 
+        " | QTY: " << order->qty << " | PRICE: " << order->price << " | TIME: "  << _time << std::endl;
+    }
+
+    // Notify of what Orders were canceled
+    void notify_reject(const unsigned int& _id, const std::string _err)
+    {
+        if (OrderTable.find(_id) == OrderTable.end()) 
+            throw std::runtime_error("Could Not Find Rejected Order");
+
+        const std::shared_ptr<OrderInfo>& order = OrderTable[_id];
+        const std::string _side = order->side == OrderSide::BID ? "BUY" : "SELL";
+        const std::string _type = order->type == OrderType::LIMIT ? "LIMIT" : "MARKET";
+        const std::string reject_msg = "[REJECTED: " + _err +  "]";
+        const std::string ticker_msg = "[" + ticker + "]";
+        order->status = OrderStatus::REJECTED; // Update Order Status
+
+        // Time Order was Rejected
+        const std::time_t& _time = time(0);
+        
+        // Notification
+        if (!vebose) return; // If not verbose, do not notify
+        std::cout << ticker_msg << " | " << reject_msg << " | " << "TYPE: " << _type << " | ID: " << order->id << " | SIDE: " << _side << 
         " | QTY: " << order->qty << " | PRICE: " << order->price << " | TIME: "  << _time << std::endl;
     }
 };
