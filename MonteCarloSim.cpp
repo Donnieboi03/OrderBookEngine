@@ -1,51 +1,76 @@
-#include "OrderEngine.cpp"
+#include "Exchange.cpp"
 
-void monte_carlo_simulation(int num_orders = 10000, double base_price = 100.0, double volatility = 1.0,  double skew = -0.05)
+// Print engine stats for a specific ticker
+void print_stats(const std::string& ticker, const std::shared_ptr<OrderEngine>& engine) 
 {
-    OrderEngine engine(base_price ,true); // Create Order Engine with verbose mode enabled
-    std::mt19937_64 rng(std::random_device{}()); // Initialize random number generator
+    std::cout << "=== STATS FOR " << ticker << " ===" << std::endl;
+    std::cout << "CURRENT PRICE: " << engine->get_price() << std::endl;
+    std::cout << "OPEN ORDERS COUNT: " << engine->get_orders_by_status(OrderStatus::OPEN).size() << std::endl;
+    std::cout << "FILLED ORDERS COUNT: " << engine->get_orders_by_status(OrderStatus::FILLED).size() << std::endl;
+    std::cout << "CANCELED ORDERS COUNT: " << engine->get_orders_by_status(OrderStatus::CANCELLED).size() << std::endl;
+    std::cout << "REJECTED ORDERS COUNT: " << engine->get_orders_by_status(OrderStatus::REJECTED).size() << std::endl;
+    std::cout << "BEST BID: " << engine->get_best_bid() << std::endl;
+    std::cout << "BEST ASK: " << engine->get_best_ask() << std::endl;
+    std::cout << "==============================" << std::endl;
+}
 
-    // Price Distribution
-    std::normal_distribution<double> skew_dist(skew, volatility);  // skew = mean, volatility = stddev
-    std::uniform_real_distribution<double> qty_dist(1, 100); // Quantity Distribution
-    std::uniform_real_distribution<double> offset_dist(-5, 5);  // Local price jitter
-    
-    // Order Side and Type Distributions
-    std::uniform_int_distribution<int> side_dist(0, 1); // 0 for ASK, 1 for BID
-    std::uniform_int_distribution<int> type_dist(0, 1); // 0 for LIMIT, 1 for MARKET
-    
-    // Cancel Order Probability Distribution
-    std::uniform_real_distribution<double> cancel_chance(0.0, 1.0); // 0 to 1
-    double cancel_probability = 0.05; // Chance of Order Cancelling
+// Monte Carlo Simulation for a single ticker
+void monte_carlo_simulation(const std::shared_ptr<Exchange>& StockExchange, const std::string& ticker, int num_orders, 
+double ipo_price, double ipo_qty, double volatility, double skew)
+{
+    StockExchange->initialize_stock(ticker, ipo_price, ipo_qty);
+    std::mt19937_64 rng(std::random_device{}());
 
-    for (int i = 0; i < num_orders; ++i)
-    { 
+    std::normal_distribution<double> skew_dist(skew, volatility);
+    std::uniform_real_distribution<double> qty_dist(1, 1000);
+    std::uniform_real_distribution<double> offset_dist(-5, 5);
+    std::uniform_int_distribution<int> side_dist(0, 1);
+    std::uniform_int_distribution<int> type_dist(0, 1);
+    std::uniform_real_distribution<double> cancel_chance(0.0, 1.0);
+
+    double cancel_probability = 0.05;
+
+    for (int i = 0; i < num_orders; ++i) {
         OrderSide side = static_cast<OrderSide>(side_dist(rng));
         OrderType type = static_cast<OrderType>(type_dist(rng));
         double qty = qty_dist(rng);
 
-        double current_price = engine.get_price(); // Get current price from Order Engine
-        double price = current_price + skew_dist(rng) + offset_dist(rng); // Get price with skew and offset
-        price = std::max(price, 0.0); // Ensure price is non-negative
-        
-        const std::string order_type = type == OrderType::LIMIT ? "LIMIT" : "MARKET";
-        std::cout << price << " " << order_type << std::endl;
-        unsigned int order_id = engine.place_order(side, type, qty, price);
-        // Randomly cancel some orders
-        if (cancel_chance(rng) < cancel_probability)
-           engine.cancel_order(order_id);
-    }
+        double current_price = StockExchange->get_price(ticker);
+        double price = current_price != -1 ? current_price + skew_dist(rng) + offset_dist(rng) : ipo_price;
+        price = std::max(price, 0.0);
+        unsigned int order_id;
+        if (type == OrderType::MARKET)
+            order_id = StockExchange->market_order(ticker, side, qty);
+        else
+            order_id = StockExchange->limit_order(ticker, side, price, qty);
 
-    std::cout << "ENDING PRICE: " <<  engine.get_price() << std::endl;
-    std::cout << "OPEN ORDERS COUNT: " << engine.get_orders_by_status(OrderStatus::OPEN).size() << std::endl;
-    std::cout << "FILLED ORDERS COUNT: " << engine.get_orders_by_status(OrderStatus::FILLED).size() << std::endl;
-    std::cout << "CANCELED ORDERS COUNT: " << engine.get_orders_by_status(OrderStatus::CANCELLED).size() << std::endl;
-    std::cout << "BEST BID: " << engine.get_best_bid() << std::endl;
-    std::cout << "BEST ASK: " << engine.get_best_ask() << std::endl;
+        if (cancel_chance(rng) < cancel_probability)
+            StockExchange->cancel_order(ticker, order_id);
+
+        //std::this_thread::sleep_for(std::chrono::milliseconds(100)); // Sleep 100ms between orders
+    }
 }
 
+// Main function to spawn threads for multiple tickers
+int main() 
+{
+    std::shared_ptr<Exchange> DBSE = std::make_shared<Exchange>();
+    std::vector<std::string> tickers = {"AAPL", "TSLA", "AMZN", "NVDA"};
+    std::vector<std::thread> threads;
 
-int main()
-{    
-    monte_carlo_simulation(10000, 100.0, 0.0005, 0.0005);
+    for (const auto& ticker : tickers) {
+        threads.emplace_back([=]() {
+            monte_carlo_simulation(DBSE, ticker, 10000, 100.0, 10000, 0.5, 0.5);
+        });
+    }
+
+    for (auto& t : threads) {
+        t.join(); // Wait for all simulations to finish
+    }
+
+    // Print stats after all threads finish
+    for (const auto& ticker : tickers) {
+        print_stats(ticker, DBSE->get_engine(ticker)); // Assumes Exchange::get_engine(ticker) exists
+    }
+    return 0;
 }
