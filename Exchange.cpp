@@ -6,8 +6,9 @@ using OrderEngines = std::unordered_map<std::string, std::shared_ptr<OrderEngine
 class Exchange
 {
     public:
-        Exchange()
-        {
+        Exchange(bool _verbose = true)
+        : verbose(_verbose)
+        { 
         }
         
         ~Exchange()
@@ -25,7 +26,7 @@ class Exchange
                 if (StockExchange.find(_ticker) != StockExchange.end())
                     throw std::runtime_error("Stock Already Exist");
 
-                auto engine = std::make_shared<OrderEngine>(std::move(_ticker), true); // verbose mode
+                auto engine = std::make_shared<OrderEngine>(std::move(_ticker), verbose); // verbose mode
                 if (!engine)
                     throw std::runtime_error("Null Matching Engine");
 
@@ -39,7 +40,8 @@ class Exchange
             }
             catch(const std::exception& e)
             {
-                std::cerr << "Stock Initlization Error: " << e.what() << '\n';
+                if (verbose)
+                    std::cerr << "Stock Initlization Error: " << e.what() << '\n';
                 return false;
             }
         }
@@ -60,8 +62,9 @@ class Exchange
                     throw std::runtime_error("Order Failed to Place");
                 return order;
             }
-            catch (const std::exception& e)
+            catch(const std::exception& e)
             {
+               if (verbose)
                 std::cerr << "Place Order Error: " << e.what() << '\n';
                 return 0;
             }
@@ -83,9 +86,10 @@ class Exchange
                     throw std::runtime_error("Order Failed to Place");
                 return order;
             }
-            catch (const std::exception& e)
+            catch(const std::exception& e)
             {
-                std::cerr << "Place Order Error: " << e.what() << '\n';
+                if (verbose)
+                    std::cerr << "Place Order Error: " << e.what() << '\n';
                 return 0;
             }
         }
@@ -103,9 +107,10 @@ class Exchange
                     throw std::runtime_error("Order Failed to Cancel");
                 return is_canceled;
             }
-            catch (const std::exception& e)
+            catch(const std::exception& e)
             {
-                std::cerr << "Cancel Order Error: " << e.what() << '\n';
+                if (verbose)
+                    std::cerr << "Cancel Order Error: " << e.what() << '\n';
                 return false;
             }
         }
@@ -123,9 +128,10 @@ class Exchange
                     throw std::runtime_error("Order Failed to Edit");
                 return order;
             }
-            catch (const std::exception& e)
+            catch(const std::exception& e)
             {
-                std::cerr << "Edit Order Error: " << e.what() << '\n';
+                if (verbose)
+                    std::cerr << "Edit Order Error: " << e.what() << '\n';
                 return 0;
             }
         }
@@ -143,9 +149,10 @@ class Exchange
                     throw std::runtime_error("Failed to Get Order");
                 return order;
             }
-            catch (const std::exception& e)
+            catch(const std::exception& e)
             {
-                std::cerr << "Get Order Error: " << e.what() << '\n';
+                if (verbose)
+                    std::cerr << "Get Order Error: " << e.what() << '\n';
                 return nullptr;
             }
         }
@@ -159,9 +166,10 @@ class Exchange
                 
                 return StockExchange.at(_ticker)->get_price();
             }
-            catch (const std::exception& e)
+            catch(const std::exception& e)
             {
-                std::cerr << "Get Price Error: " << e.what() << '\n';
+                if (verbose)
+                    std::cerr << "Get Price Error: " << e.what() << '\n';
                 return -1;
             }
         }
@@ -179,9 +187,10 @@ class Exchange
                     throw std::runtime_error("Bid Side is Empty");
                 return best_bid;
             }
-            catch (const std::exception& e)
+            catch(const std::exception& e)
             {
-                std::cerr << "Get Best Bid Error: " << e.what() << '\n';
+                if (verbose)
+                    std::cerr << "Get Best Bid Error: " << e.what() << '\n';
                 return -1;
             }
         }
@@ -199,9 +208,10 @@ class Exchange
                     throw std::runtime_error("Ask Side is Empty");
                 return best_ask;
             }
-            catch (const std::exception& e)
+            catch(const std::exception& e)
             {
-                std::cerr << "Get Best Ask Error: " << e.what() << '\n';
+                if (verbose)
+                    std::cerr << "Get Best Ask Error: " << e.what() << '\n';
                 return -1;
             }
         }
@@ -214,9 +224,10 @@ class Exchange
                     throw std::runtime_error("Stock Does Not Exist");
                 return StockExchange.at(_ticker)->get_orders_by_status(status);
             }
-            catch (const std::exception& e)
+            catch(const std::exception& e)
             {
-                std::cerr << "Get Orders By Status Error: " << e.what() << '\n';
+                if (verbose)
+                    std::cerr << "Get Orders By Status Error: " << e.what() << '\n';
                 return {};
             }
         }
@@ -229,9 +240,10 @@ class Exchange
                     throw std::runtime_error("Stock Does Not Exist");
                 return StockExchange.at(_ticker)->get_market_depth(_side, depth);
             }
-            catch (const std::exception& e)
+            catch(const std::exception& e)
             {
-                std::cerr << "Get Market Depth Error: " << e.what() << '\n';
+                if (verbose)
+                    std::cerr << "Get Market Depth Error: " << e.what() << '\n';
                 return {};
             }
         }
@@ -244,7 +256,26 @@ class Exchange
                 tickers.push_back(stock.first);
             return std::move(tickers);
         }
+        
+        std::shared_ptr<OrderEngine> get_engine(const std::string& _ticker) const
+        {
+            try
+            {
+                 // If ticker is not in Exchange then error
+                if (StockExchange.find(_ticker) == StockExchange.end())
+                    throw std::runtime_error("Stock Does Not Exist");
+                return StockExchange.at(_ticker);
+            }
+            catch(const std::exception& e)
+            {
+                if (verbose)
+                    std::cerr << "Get Engine Error: " << e.what() << '\n';
+                return nullptr;
+            }
+            
+        }
 
     private:
         OrderEngines StockExchange;
+        bool verbose; // Verbose Mode
 };
